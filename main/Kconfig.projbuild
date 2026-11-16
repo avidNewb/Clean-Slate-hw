@@ -1,0 +1,200 @@
+menu "Clean Slate Display Configuration"
+
+    config CS_FIRMWARE_VERSION
+        string "Firmware Semantic Version (matches Clean Slate OTA manifest)"
+        default "0.1.0"
+
+    menu "Wi-Fi Settings"
+        config CS_WIFI_SSID
+            string "Default Wi-Fi SSID (leave empty for Captive Portal Setup)"
+            default ""
+            help
+                Optional compile-time fallback SSID. Leave blank to boot directly into
+                the CleanSlate-XXXX Captive Portal Setup AP (http://192.168.4.1/) for
+                phone/browser onboarding. NVS credentials saved via the portal take precedence.
+
+        config CS_WIFI_PASSWORD
+            string "Wi-Fi Password"
+            default ""
+            help
+                WPA2/WPA3 password for the Wi-Fi network. Leave empty for open networks.
+
+        config CS_WIFI_MAX_BACKOFF_SEC
+            int "Maximum Wi-Fi reconnect backoff (seconds)"
+            range 5 300
+            default 30
+    endmenu
+
+    menu "Clean Slate Cloud API Settings"
+        config CS_API_BASE_URL
+            string "Clean Slate API Base URL"
+            default "http://192.168.1.100:8000"
+            help
+                Base URL of your Clean Slate FastAPI server (local or Azure App Service, no trailing slash).
+
+        config CS_API_DEVICE_ID
+            string "Device ID (empty = derive from MAC)"
+            default ""
+            help
+                Used in /api/v1/device/{device_id}/frame and /config. If empty, uses clean-slate-<last3macbytes>.
+
+        config CS_API_POLL_INTERVAL_SEC
+            int "Fallback Poll Interval (seconds)"
+            range 1 3600
+            default 15
+            help
+                Used when the server does not return refresh_seconds or on fallback.
+
+        config CS_API_CONFIG_SYNC_SEC
+            int "Device Config Sync Interval (seconds)"
+            range 30 86400
+            default 300
+            help
+                How often to re-fetch /api/v1/device/{device_id}/config for timezone, enabled apps, and brightness.
+
+        config CS_API_HTTP_TIMEOUT_MS
+            int "HTTP Request Timeout (ms)"
+            range 1000 60000
+            default 15000
+
+        config CS_API_MAX_BACKOFF_SEC
+            int "Maximum API error backoff (seconds)"
+            range 5 600
+            default 60
+
+        config CS_API_ERROR_BLINK_THRESHOLD
+            int "Failures before showing red corner indicator"
+            range 1 50
+            default 3
+
+        config CS_OTA_ENABLED
+            bool "Enable OTA Firmware Check (/api/v1/firmware/check)"
+            default y
+
+        config CS_OTA_CHECK_INTERVAL_SEC
+            int "OTA Check Interval (seconds)"
+            depends on CS_OTA_ENABLED
+            range 300 604800
+            default 21600
+    endmenu
+
+    menu "Local Time & NTP Settings"
+        config CS_NTP_SERVER
+            string "NTP Server"
+            default "pool.ntp.org"
+
+        config CS_DEFAULT_TIMEZONE
+            string "Default IANA Timezone (overridden by server config)"
+            default "America/Chicago"
+    endmenu
+
+    menu "HUB75 Matrix Settings"
+        config CS_HUB75_PCLK_MHZ
+            int "HUB75 Pixel Clock (MHz)"
+            range 2 20
+            default 8
+            help
+                Pixel shift clock in MHz (8 MHz recommended; lower to 4-5 MHz if jumper wires cause glitches).
+
+        config CS_HUB75_CLK_PHASE_INV
+            bool "Invert I2S WS clock output for HUB75 CLK"
+            default y
+
+        config CS_HUB75_DEFAULT_BRIGHTNESS
+            int "Default Brightness (0-255)"
+            range 1 255
+            default 128
+
+        config CS_HUB75_MIN_BRIGHTNESS
+            int "Minimum Auto-Brightness (1-255)"
+            range 1 255
+            default 15
+
+        config CS_HUB75_MAX_BRIGHTNESS
+            int "Maximum Auto-Brightness (1-255)"
+            range 1 255
+            default 255
+    endmenu
+
+    menu "Peripherals & DFPlayer Audio"
+        config CS_ENABLE_LIGHT_SENSOR
+            bool "Enable Ambient Light Sensor Auto-Brightness (GPIO 34)"
+            default y
+
+        config CS_ENABLE_BUTTON
+            bool "Enable Push Button Input (GPIO 35)"
+            default y
+
+        config CS_ENABLE_ENCODER
+            bool "Enable Rotary Encoder App Switching (GPIO 39 / GPIO 36)"
+            default y
+
+        config CS_ROTARY_IDLE_SEC
+            int "Rotary Encoder Idle Return-to-Auto Delay (seconds, 0=stay pinned)"
+            depends on CS_ENABLE_ENCODER
+            range 0 600
+            default 30
+            help
+                Seconds of inactivity after turning the rotary knob before automatically
+                returning to the server Auto schedule. Matches the legacy 30s behavior.
+
+        config CS_ENABLE_DFPLAYER
+            bool "Enable DFPlayer Mini UART (RX=GPIO 13, TX=GPIO 0)"
+            default y
+            help
+                Note: GPIO 0 is a boot strapping pin. Ensure DFPlayer does not pull GPIO 0 LOW during reset.
+
+        config CS_DFPLAYER_DEFAULT_VOLUME
+            int "Default DFPlayer Volume (0-30)"
+            depends on CS_ENABLE_DFPLAYER
+            range 0 30
+            default 18
+
+        config CS_FIGHT_SONG_FOLDER
+            int "Manual Fight Song Folder (0=global root index, 1-99=/FF/ folder)"
+            depends on CS_ENABLE_DFPLAYER
+            range 0 99
+            default 0
+
+        config CS_FIGHT_SONG_TRACK
+            int "Manual Fight Song Track Number (button single-click)"
+            depends on CS_ENABLE_DFPLAYER
+            range 1 2999
+            default 1
+
+        config CS_VICTORY_SONG_FOLDER
+            int "Manual Victory Song Folder (0=global root index, 1-99=/FF/ folder)"
+            depends on CS_ENABLE_DFPLAYER
+            range 0 99
+            default 0
+
+        config CS_VICTORY_SONG_TRACK
+            int "Manual Victory Song Track Number (button double-click)"
+            depends on CS_ENABLE_DFPLAYER
+            range 1 2999
+            default 2
+
+        config CS_THIRD_SONG_FOLDER
+            int "Manual 3rd Song Folder (0=global root index, 1-99=/FF/ folder)"
+            depends on CS_ENABLE_DFPLAYER
+            range 0 99
+            default 0
+
+        config CS_THIRD_SONG_TRACK
+            int "Manual 3rd Song Track Number (button triple-click)"
+            depends on CS_ENABLE_DFPLAYER
+            range 1 2999
+            default 3
+
+        config CS_PLAY_BOOT_TONE
+            bool "Play Startup Boot Tone (/03/002.mp3) on Boot"
+            depends on CS_ENABLE_DFPLAYER
+            default y
+
+        config CS_PLAY_HOURLY_CHIME
+            bool "Play Hourly Chime (/03/001.mp3) Outside Quiet Hours"
+            depends on CS_ENABLE_DFPLAYER
+            default n
+    endmenu
+
+endmenu
