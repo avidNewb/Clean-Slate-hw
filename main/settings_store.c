@@ -179,6 +179,7 @@ esp_err_t settings_store_init(void)
         nvs_read_str_opt(h, "ntp_srv", tmp.ntp_server, sizeof(tmp.ntp_server));
         nvs_read_str_opt(h, "q_start", tmp.quiet_start, sizeof(tmp.quiet_start));
         nvs_read_str_opt(h, "q_end", tmp.quiet_end, sizeof(tmp.quiet_end));
+        nvs_read_str_opt(h, "pin_app", tmp.pinned_app, sizeof(tmp.pinned_app));
 
         uint8_t u8 = 0;
         uint16_t u16 = 0;
@@ -382,6 +383,7 @@ esp_err_t settings_store_save(const cs_local_settings_t *in)
     if (err == ESP_OK) err = nvs_set_u16(h, "vc_trk", clean.victory_track);
     if (err == ESP_OK) err = nvs_set_u8(h, "th_fld", clean.third_folder);
     if (err == ESP_OK) err = nvs_set_u16(h, "th_trk", clean.third_track);
+    if (err == ESP_OK) err = nvs_set_str(h, "pin_app", clean.pinned_app);
     if (err == ESP_OK) err = nvs_set_u8(h, "sync_pend", clean.cloud_sync_pending ? 1U : 0U);
     if (err == ESP_OK) err = nvs_commit(h);
 

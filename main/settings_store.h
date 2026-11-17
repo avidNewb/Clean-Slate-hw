@@ -37,6 +37,7 @@ typedef struct {
     uint16_t victory_track;    /* Default 2 */
     uint8_t third_folder;      /* 0 = global DFPlayer track index, 1..99 = folder */
     uint16_t third_track;      /* Default 3 */
+    char pinned_app[32];       /* Empty = Auto schedule, else pinned app_id */
     bool cloud_sync_pending;
 } cs_local_settings_t;
 

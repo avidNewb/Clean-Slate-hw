@@ -60,6 +60,12 @@ ESP-IDF (`v6.0.2`, `esp32` target) thin-client firmware for the legacy 64×32 HU
    idf.py build
    idf.py -p COMx flash monitor
    ```
+4. Optional OTA push to the Clean Slate server (`idf.py push`, or `idf.py build push`):
+   ```powershell
+   $env:CS_OTA_ADMIN_TOKEN = "<your-admin-token>"
+   idf.py push --notes "Release summary"
+   ```
+   Defaults to `https://clean-slate-cce5b9f3g2ggf5cv.westus3-01.azurewebsites.net` (override with `--url` or `$env:CS_OTA_SERVER_URL`), passes `X-Admin-Token` via `--token` or `$env:CS_OTA_ADMIN_TOKEN`, and reads `CONFIG_CS_FIRMWARE_VERSION` from `sdkconfig`.
 
 ## MicroSD Soundpack Layout (DFPlayer)
 

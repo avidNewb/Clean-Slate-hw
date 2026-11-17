@@ -557,6 +557,9 @@ static esp_err_t handle_post_settings(httpd_req_t *req)
     bool have_pinned = false;
     if (json_obj_get(root, "pinned_app", &fv)) {
         have_pinned = json_as_str(fv, pinned_app, sizeof(pinned_app));
+        if (have_pinned) {
+            snprintf(cfg.pinned_app, sizeof(cfg.pinned_app), "%s", pinned_app);
+        }
     }
 
     char *app_settings_raw = NULL;
@@ -697,6 +700,10 @@ static esp_err_t handle_post_action(httpd_req_t *req)
             s_hooks.on_request_ota();
         }
     } else if (strcmp(action, "set_app") == 0) {
+        cs_local_settings_t cfg;
+        settings_store_get(&cfg);
+        snprintf(cfg.pinned_app, sizeof(cfg.pinned_app), "%s", app_arg);
+        settings_store_save(&cfg);
         if (s_hooks.on_set_pinned_app) {
             s_hooks.on_set_pinned_app(app_arg);
         }

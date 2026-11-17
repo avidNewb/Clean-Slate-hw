@@ -1116,7 +1116,7 @@ static void input_task(void *arg)
 {
     QueueHandle_t q = (QueueHandle_t)arg;
     cs_input_event_t ev;
-    int64_t last_lux_us = 0;
+    int64_t last_lux_us = -500000LL;
 
     while (true) {
         if (q && xQueueReceive(q, &ev, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -1592,6 +1592,10 @@ static void api_task(void *arg)
             if (api_client_fetch_config(&new_cfg) == ESP_OK) {
                 last_cfg_us = now_us;
                 sntp_time_set_timezone(new_cfg.timezone);
+                settings_store_get(&local);
+                /* Local NVS owns brightness mode (cloud /config cannot clear override back to Auto/null). */
+                new_cfg.brightness_override = local.brightness_override;
+
                 if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     if (new_cfg.enabled_app_count == 0) {
                         new_cfg.enabled_app_count = s_shared.cfg.enabled_app_count;
@@ -1608,37 +1612,58 @@ static void api_task(void *arg)
                     if (cfg_changed) {
                         cache_invalidate_all_locked();
                     }
-                    int prev_override = s_shared.cfg.brightness_override;
                     s_shared.cfg = new_cfg;
 #if CONFIG_CS_ENABLE_LIGHT_SENSOR
-                    if (new_cfg.brightness_override >= 0) {
-                        s_shared.auto_brightness = false;
-                    } else if (prev_override >= 0) {
-                        s_shared.auto_brightness = true;
-                    }
-#else
-                    (void)prev_override;
+                    s_shared.auto_brightness = (local.brightness_override < 0);
 #endif
-                    if (s_shared.selected_app_idx >= (int)s_shared.cfg.enabled_app_count) {
+                    if (!s_shared.rotary_override_active) {
+                        s_shared.selected_app_idx = -1;
+                        if (local.pinned_app[0] != '\0') {
+                            for (size_t i = 0; i < s_shared.cfg.enabled_app_count; i++) {
+                                if (strcmp(s_shared.cfg.enabled_apps[i], local.pinned_app) == 0) {
+                                    s_shared.selected_app_idx = (int)i;
+                                    break;
+                                }
+                            }
+                        }
+                    } else if (s_shared.selected_app_idx >= (int)s_shared.cfg.enabled_app_count) {
                         s_shared.selected_app_idx = -1;
                     }
                     xSemaphoreGive(s_state_mutex);
                 }
 
-                /* Keep local NVS aligned if config was updated from cloud web UI */
-                settings_store_get(&local);
+                /* Keep local NVS aligned if cloud-owned fields changed on server */
                 if (!local.cloud_sync_pending) {
-                    if (new_cfg.favorite_teams[0]) {
+                    bool nvs_changed = false;
+                    if (new_cfg.favorite_teams[0] &&
+                        strcmp(local.favorite_teams, new_cfg.favorite_teams) != 0) {
                         snprintf(local.favorite_teams, sizeof(local.favorite_teams),
                                  "%s", new_cfg.favorite_teams);
+                        nvs_changed = true;
                     }
-                    snprintf(local.device_name, sizeof(local.device_name), "%s", new_cfg.device_name);
-                    snprintf(local.timezone, sizeof(local.timezone), "%s", new_cfg.timezone);
-                    snprintf(local.quiet_start, sizeof(local.quiet_start), "%s", new_cfg.quiet_start);
-                    snprintf(local.quiet_end, sizeof(local.quiet_end), "%s", new_cfg.quiet_end);
-                    local.quiet_enabled = new_cfg.quiet_enabled;
-                    local.brightness_override = new_cfg.brightness_override;
-                    settings_store_save(&local);
+                    if (strcmp(local.device_name, new_cfg.device_name) != 0) {
+                        snprintf(local.device_name, sizeof(local.device_name), "%s", new_cfg.device_name);
+                        nvs_changed = true;
+                    }
+                    if (strcmp(local.timezone, new_cfg.timezone) != 0) {
+                        snprintf(local.timezone, sizeof(local.timezone), "%s", new_cfg.timezone);
+                        nvs_changed = true;
+                    }
+                    if (strcmp(local.quiet_start, new_cfg.quiet_start) != 0) {
+                        snprintf(local.quiet_start, sizeof(local.quiet_start), "%s", new_cfg.quiet_start);
+                        nvs_changed = true;
+                    }
+                    if (strcmp(local.quiet_end, new_cfg.quiet_end) != 0) {
+                        snprintf(local.quiet_end, sizeof(local.quiet_end), "%s", new_cfg.quiet_end);
+                        nvs_changed = true;
+                    }
+                    if (local.quiet_enabled != new_cfg.quiet_enabled) {
+                        local.quiet_enabled = new_cfg.quiet_enabled;
+                        nvs_changed = true;
+                    }
+                    if (nvs_changed) {
+                        settings_store_save(&local);
+                    }
                 }
             }
         }
@@ -1856,12 +1881,20 @@ void app_main(void)
     s_frame_cache = psram_prefer_calloc(CS_MAX_APPS, sizeof(app_frame_cache_entry_t));
 
     init_default_config(&s_shared.cfg);
+    s_shared.selected_app_idx = -1;
     {
         cs_local_settings_t boot_local;
         settings_store_get(&boot_local);
         s_shared.rotary_idle_sec = boot_local.rotary_idle_sec;
+        if (boot_local.pinned_app[0] != '\0') {
+            for (size_t i = 0; i < s_shared.cfg.enabled_app_count; i++) {
+                if (strcmp(s_shared.cfg.enabled_apps[i], boot_local.pinned_app) == 0) {
+                    s_shared.selected_app_idx = (int)i;
+                    break;
+                }
+            }
+        }
     }
-    s_shared.selected_app_idx = -1;
 #if CONFIG_CS_ENABLE_LIGHT_SENSOR
     s_shared.auto_brightness = (s_shared.cfg.brightness_override < 0);
 #else
