@@ -153,6 +153,11 @@ static void build_dma_buffer(uint16_t *dma_buf, const uint8_t *rgb888, uint8_t b
     memcpy(s_work_fb, rgb888, sizeof(s_work_fb));
     apply_status_dot(s_work_fb);
 
+    // Pre-apply gamma LUT once across the 6,144-byte framebuffer instead of 8x inside the BCM loop
+    for (size_t i = 0; i < sizeof(s_work_fb); i++) {
+        s_work_fb[i] = s_gamma_lut[s_work_fb[i]];
+    }
+
     size_t idx = 0;
 
     for (int step = 0; step < total_steps; step++) {
@@ -191,12 +196,12 @@ static void build_dma_buffer(uint16_t *dma_buf, const uint8_t *rgb888, uint8_t b
 
         for (int col = 0; col < CS_HUB75_WIDTH; col++) {
             const size_t px = (size_t)col * 3;
-            const uint8_t r1 = s_gamma_lut[upper_row[px + 0]];
-            const uint8_t g1 = s_gamma_lut[upper_row[px + 1]];
-            const uint8_t b1 = s_gamma_lut[upper_row[px + 2]];
-            const uint8_t r2 = s_gamma_lut[lower_row[px + 0]];
-            const uint8_t g2 = s_gamma_lut[lower_row[px + 1]];
-            const uint8_t b2 = s_gamma_lut[lower_row[px + 2]];
+            const uint8_t r1 = upper_row[px + 0];
+            const uint8_t g1 = upper_row[px + 1];
+            const uint8_t b1 = upper_row[px + 2];
+            const uint8_t r2 = lower_row[px + 0];
+            const uint8_t g2 = lower_row[px + 1];
+            const uint8_t b2 = lower_row[px + 2];
 
             uint16_t word = prev_addr;
             if (col < (int)SHIFT_ACTIVE_SLOTS) {
@@ -240,6 +245,9 @@ static void swap_dma_buffers_locked(void)
 
     // Ensure back ring loops onto itself once entered
     s_dma_ring[back_idx][s_desc_count - 1].qe.stqe_next = &s_dma_ring[back_idx][0];
+
+    // Memory barrier so DMA sees all pixel and descriptor writes before splicing the ring
+    __sync_synchronize();
 
     // Atomically splice front ring's tail into back ring's head at frame boundary
     s_dma_ring[s_front_idx][s_desc_count - 1].qe.stqe_next = &s_dma_ring[back_idx][0];

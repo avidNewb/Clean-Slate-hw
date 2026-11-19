@@ -28,7 +28,7 @@ menu "Clean Slate Display Configuration"
     menu "Clean Slate Cloud API Settings"
         config CS_API_BASE_URL
             string "Clean Slate API Base URL"
-            default "http://192.168.1.100:8000"
+            default "https://clean-slate-cce5b9f3g2ggf5cv.westus3-01.azurewebsites.net"
             help
                 Base URL of your Clean Slate FastAPI server (local or Azure App Service, no trailing slash).
 
@@ -151,10 +151,10 @@ menu "Clean Slate Display Configuration"
             default 18
 
         config CS_FIGHT_SONG_FOLDER
-            int "Manual Fight Song Folder (0=global root index, 1-99=/FF/ folder)"
+            int "Manual Fight Song Folder (1-99=/FF/ folder, 0=legacy global copy-order index)"
             depends on CS_ENABLE_DFPLAYER
             range 0 99
-            default 0
+            default 1
 
         config CS_FIGHT_SONG_TRACK
             int "Manual Fight Song Track Number (button single-click)"
@@ -163,10 +163,10 @@ menu "Clean Slate Display Configuration"
             default 1
 
         config CS_VICTORY_SONG_FOLDER
-            int "Manual Victory Song Folder (0=global root index, 1-99=/FF/ folder)"
+            int "Manual Victory Song Folder (1-99=/FF/ folder, 0=legacy global copy-order index)"
             depends on CS_ENABLE_DFPLAYER
             range 0 99
-            default 0
+            default 1
 
         config CS_VICTORY_SONG_TRACK
             int "Manual Victory Song Track Number (button double-click)"
@@ -175,10 +175,10 @@ menu "Clean Slate Display Configuration"
             default 2
 
         config CS_THIRD_SONG_FOLDER
-            int "Manual 3rd Song Folder (0=global root index, 1-99=/FF/ folder)"
+            int "Manual 3rd Song Folder (1-99=/FF/ folder, 0=legacy global copy-order index)"
             depends on CS_ENABLE_DFPLAYER
             range 0 99
-            default 0
+            default 1
 
         config CS_THIRD_SONG_TRACK
             int "Manual 3rd Song Track Number (button triple-click)"

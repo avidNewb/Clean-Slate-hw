@@ -29,6 +29,7 @@ static const DRAM_ATTR int8_t k_qdec_lut[16] = {
      0, -1,  1,  0
 };
 static volatile uint8_t s_enc_old_ab = 0;
+static volatile uint8_t s_enc_rest_ab = 0;
 static volatile int8_t s_enc_accum = 0;
 static volatile int64_t s_enc_last_edge_us = 0;
 
@@ -49,9 +50,13 @@ static void IRAM_ATTR enc_gpio_isr(void *arg)
     }
 
     int64_t now_us = esp_timer_get_time();
-    if ((now_us - s_enc_last_edge_us) >= 60000LL && (ab == 0U || ab == 3U)) {
-        /* Clear any half-detent remainder once knob has rested at a detent */
-        s_enc_accum = 0;
+    if ((now_us - s_enc_last_edge_us) >= 250000LL && (ab == 0U || ab == 3U)) {
+        /* Clear stale remainder only after an extended idle pause at a resting detent */
+        if (ab == s_enc_rest_ab || s_enc_accum == 0 ||
+            (s_enc_rest_ab != 0U && s_enc_rest_ab != 3U)) {
+            s_enc_accum = 0;
+            s_enc_rest_ab = ab;
+        }
     }
 
     int8_t step = k_qdec_lut[(s_enc_old_ab << 2) | ab];
@@ -62,6 +67,15 @@ static void IRAM_ATTR enc_gpio_isr(void *arg)
 
     s_enc_last_edge_us = now_us;
     int8_t accum = (int8_t)(s_enc_accum + step);
+
+    /* Recover a skipped edge when completing a full cycle back to the resting detent */
+    if (ab == s_enc_rest_ab) {
+        if (accum >= 2 && accum < 4) {
+            accum = 4;
+        } else if (accum <= -2 && accum > -4) {
+            accum = -4;
+        }
+    }
 
     BaseType_t hpw = pdFALSE;
     while (accum >= 4) {
@@ -234,6 +248,7 @@ esp_err_t peripherals_init(QueueHandle_t *out_event_queue)
     configure_input_only_gpio(CS_PIN_ENCODER_B, GPIO_INTR_ANYEDGE);
     s_enc_old_ab = (uint8_t)((gpio_get_level(CS_PIN_ENCODER_A) << 1) |
                              gpio_get_level(CS_PIN_ENCODER_B));
+    s_enc_rest_ab = s_enc_old_ab;
     s_enc_accum = 0;
     s_enc_last_edge_us = esp_timer_get_time();
     ESP_RETURN_ON_ERROR(gpio_isr_handler_add(CS_PIN_ENCODER_A, enc_gpio_isr, NULL),

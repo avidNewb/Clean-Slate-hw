@@ -15,13 +15,19 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+CONFIG_CS_API_BASE_URL="https://clean-slate-cce5b9f3g2ggf5cv.westus3-01.azurewebsites.net"
 CONFIG_CS_API_HTTP_TIMEOUT_MS=15000
 
 # Main task stack headroom
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 
 # Firmware version (OTA manifest)
-CONFIG_CS_FIRMWARE_VERSION="0.1.13"
+CONFIG_CS_FIRMWARE_VERSION="0.1.28"
+
+# OTA rollback safety, size optimization (-Os), and Task WDT panic self-recovery
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESP_TASK_WDT_PANIC=y
 
 # PSRAM support for ESP32-WROVER (falls back gracefully on non-PSRAM boards)
 CONFIG_SPIRAM=y
@@ -33,3 +39,6 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # Move large mbedTLS buffers to PSRAM (via default alloc + lower ALWAYSINTERNAL) with safe non-PSRAM fallback
 CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# Socket headroom for httpd + concurrent mDNS/SNTP/TLS polling
+CONFIG_LWIP_MAX_SOCKETS=16

@@ -4,7 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light dark">
-  <title>Clean Slate | Setup &amp; Device Settings</title>
+  <meta name="theme-color" content="#f4f6f9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f131a" media="(prefers-color-scheme: dark)">
+  <title>Clean Slate | Device Configuration</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="/site.webmanifest">
   <style>
     :root {
       --bg-light: #f4f6f9;
@@ -92,33 +98,30 @@
     }
 
     .container {
-      max-inline-size: 44rem;
+      max-inline-size: 48rem;
       margin-inline: auto;
       display: flex;
       flex-direction: column;
-      gap: 1.25rem;
+      gap: 1rem;
     }
 
     header, footer {
       display: block;
     }
 
-    main {
-      display: flex;
-      flex-direction: column;
-      gap: 1.25rem;
-    }
-
     .hero {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 1.25rem;
+      padding: 1.15rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
     }
 
     h1 {
-      margin-block: 0 0.25rem;
-      font-size: 1.5rem;
+      margin-block: 0 0.2rem;
+      font-size: 1.45rem;
       line-height: 1.25;
     }
 
@@ -127,8 +130,12 @@
       font-size: 1.2rem;
     }
 
+    h2[tabindex="-1"]:focus {
+      outline: none;
+    }
+
     h3 {
-      margin-block: 0.75rem 0.5rem;
+      margin-block: 0.5rem;
       font-size: 1rem;
     }
 
@@ -138,14 +145,14 @@
 
     .subtitle {
       color: var(--muted);
-      font-size: 0.95rem;
-      margin-block-end: 0.75rem;
+      font-size: 0.92rem;
+      margin: 0;
     }
 
     .pills {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.5rem;
+      gap: 0.45rem;
       list-style: none;
       padding: 0;
       margin: 0;
@@ -155,9 +162,131 @@
       background: var(--surface-alt);
       border: 1px solid var(--border);
       border-radius: 999px;
-      padding: 0.25rem 0.75rem;
-      font-size: 0.85rem;
+      padding: 0.2rem 0.7rem;
+      font-size: 0.82rem;
       font-weight: 600;
+    }
+
+    /* Primary SPA Navigation */
+    .site-nav {
+      border-block-start: 1px solid var(--border);
+      padding-block-start: 0.65rem;
+    }
+
+    .nav-list {
+      display: flex;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      gap: 0.35rem;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      scrollbar-width: thin;
+    }
+
+    .nav-list li {
+      flex: 0 0 auto;
+    }
+
+    .nav-link {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      min-height: 44px;
+      padding: 0.45rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      text-decoration: none;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.93rem;
+      white-space: nowrap;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+
+    .nav-link:hover {
+      background: var(--surface-alt);
+    }
+
+    .nav-link[aria-current="page"] {
+      color: var(--accent);
+      background: var(--surface-alt);
+      border-color: var(--border);
+    }
+
+    .nav-link[aria-current="page"]::after {
+      content: "";
+      position: absolute;
+      inset-inline: 0.5rem;
+      inset-block-end: 0;
+      border-block-end: 3px solid var(--accent);
+      border-radius: 2px;
+    }
+
+    .nav-badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      padding: 0.08rem 0.42rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+    }
+
+    .nav-badge[data-tone="ok"] {
+      border-color: var(--ok);
+      color: var(--ok);
+    }
+
+    .nav-badge[data-tone="err"] {
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    @media (forced-colors: active) {
+      .nav-link[aria-current="page"] {
+        border: 2px solid Highlight;
+      }
+      .nav-link[aria-current="page"]::after {
+        border-block-end-color: Highlight;
+      }
+    }
+
+    /* Cached SPA Views (faster-spa-view-transitions) */
+    .spa-views {
+      position: relative;
+      min-block-size: 12rem;
+    }
+
+    .spa-view {
+      display: flex;
+      flex-direction: column;
+      gap: 1.15rem;
+      view-transition-name: active-page;
+    }
+
+    .spa-view.inactive {
+      content-visibility: hidden;
+      position: absolute;
+      inset-inline: 0;
+      inset-block-start: 0;
+      pointer-events: none;
+      view-transition-name: none;
+    }
+
+    @supports not (content-visibility: hidden) {
+      .spa-view.inactive {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      ::view-transition-group(*),
+      ::view-transition-old(*),
+      ::view-transition-new(*) {
+        animation: none !important;
+      }
     }
 
     .card {
@@ -172,7 +301,7 @@
       border-radius: 8px;
       padding: 1rem;
       margin-inline: 0;
-      margin-block-end: 1.25rem;
+      margin-block-end: 1.15rem;
     }
 
     legend {
@@ -185,10 +314,21 @@
       flex-direction: column;
       align-items: stretch;
       gap: 0.25rem;
-      margin-block-end: 1.15rem;
+      margin-block-end: 1.05rem;
     }
 
     .field:last-child {
+      margin-block-end: 0;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.85rem;
+      margin-block-end: 1.05rem;
+    }
+
+    .field-row .field {
       margin-block-end: 0;
     }
 
@@ -198,7 +338,7 @@
 
     .hint {
       color: var(--muted);
-      font-size: 0.875rem;
+      font-size: 0.86rem;
       margin-block: 0 0.15rem;
     }
 
@@ -207,11 +347,12 @@
     input[type="url"],
     input[type="time"],
     input[type="number"],
+    input[type="search"],
     select {
       font: inherit;
       font-size: max(1rem, 1em);
-      min-height: 48px;
-      padding: 0.6rem 0.75rem;
+      min-height: 46px;
+      padding: 0.55rem 0.75rem;
       border: 1.5px solid var(--border);
       border-radius: 8px;
       background: var(--bg);
@@ -236,7 +377,7 @@
       display: flex;
       align-items: center;
       gap: 0.65rem;
-      min-height: 48px;
+      min-height: 44px;
     }
 
     .check-row label {
@@ -257,10 +398,10 @@
 
     button {
       font: inherit;
-      font-size: max(1rem, 1em);
+      font-size: max(0.95rem, 1em);
       font-weight: 600;
-      min-height: 48px;
-      padding: 0.6rem 1rem;
+      min-height: 44px;
+      padding: 0.55rem 0.95rem;
       border-radius: 8px;
       border: 1.5px solid var(--border);
       background: var(--surface-alt);
@@ -278,6 +419,12 @@
       border-color: var(--danger);
       color: var(--danger);
       background: transparent;
+    }
+
+    button.small {
+      min-height: 36px;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.86rem;
     }
 
     button:hover:not(:disabled) {
@@ -306,7 +453,7 @@
     .error-msg {
       display: none;
       color: var(--danger);
-      font-size: 0.875rem;
+      font-size: 0.86rem;
       margin-block-start: 0.2rem;
     }
 
@@ -317,12 +464,12 @@
     .btn-bar {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.75rem;
+      gap: 0.65rem;
       margin-block-start: 0.5rem;
     }
 
     .status-banner {
-      padding: 0.85rem 1rem;
+      padding: 0.8rem 1rem;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--surface);
@@ -412,11 +559,7 @@
       padding-block-end: 1rem;
     }
 
-    .matrix-card {
-      content-visibility: auto;
-      contain-intrinsic-size: auto none auto 280px;
-    }
-
+    /* Preview & Control */
     .matrix-bezel {
       background: #05070b;
       border: 2px solid #232a36;
@@ -448,6 +591,353 @@
       flex: 1 1 200px;
     }
 
+    .control-group {
+      margin-block-start: 0.9rem;
+    }
+
+    .control-group-label {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin-block-end: 0.35rem;
+    }
+
+    /* Apps Page (Multi-App Architecture) */
+    .apps-summary-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+
+    .app-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      background: var(--surface-alt);
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+
+    .app-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.6rem;
+    }
+
+    .app-card-title {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .app-card-title h3 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .app-id-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      padding: 0.12rem 0.45rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+    }
+
+    .app-subbox {
+      padding: 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .app-subbox-title {
+      margin: 0 0 0.6rem;
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .app-enable-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      cursor: pointer;
+    }
+
+    .schedule-toggle-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+
+    .schedule-panel {
+      margin-block-start: 0.65rem;
+      padding-block-start: 0.75rem;
+      border-block-start: 1px solid var(--border);
+    }
+
+    .day-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+
+    .day-pill {
+      position: relative;
+      display: inline-flex;
+    }
+
+    .day-pill input {
+      position: absolute;
+      opacity: 0;
+      width: 1px;
+      height: 1px;
+    }
+
+    .day-pill span {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2.65rem;
+      min-height: 36px;
+      padding: 0.25rem 0.5rem;
+      border-radius: 999px;
+      border: 1.5px solid var(--border);
+      background: var(--surface-alt);
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .day-pill input:checked + span {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+
+    .day-pill input:focus-visible + span {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .multi-select-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.2rem 0.75rem;
+      margin-block: 0.45rem;
+    }
+
+    .multi-select-grid .check-row {
+      min-height: 36px;
+    }
+
+    .bday-add-row {
+      display: grid;
+      grid-template-columns: 7rem minmax(110px, 1fr) 6.5rem minmax(140px, 1fr) auto;
+      gap: 0.5rem;
+      align-items: end;
+      margin-block: 0.35rem 0.65rem;
+    }
+
+    @media (max-width: 720px) {
+      .bday-add-row {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .alarm-add-row {
+      display: grid;
+      grid-template-columns: 7.75rem minmax(105px, 1fr) minmax(130px, 1fr) minmax(130px, 1fr) auto;
+      gap: 0.5rem;
+      align-items: end;
+      margin-block: 0.35rem 0.5rem;
+    }
+
+    @media (max-width: 720px) {
+      .alarm-add-row {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .alarm-days-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.85rem;
+      margin-block: 0.25rem 0.65rem;
+    }
+
+    .alarm-days-row .check-row {
+      min-height: 36px;
+    }
+
+    .alarm-ringing-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      border: 2px solid var(--danger);
+      background: var(--danger-bg);
+      color: var(--danger);
+      font-weight: 700;
+    }
+
+    .alarm-ringing-bar[hidden] {
+      display: none;
+    }
+
+    .alarm-summary-list {
+      list-style: none;
+      margin: 0.5rem 0 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .alarm-summary-item {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem 0.85rem;
+      padding: 0.6rem 0.8rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-alt);
+    }
+
+    .alarm-summary-item.is-disabled {
+      opacity: 0.65;
+    }
+
+    .alarm-summary-time {
+      font-size: 1.1rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .alarm-summary-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .bday-table select {
+      min-height: 36px;
+      padding: 0.25rem 0.45rem;
+      font-size: 0.85rem;
+    }
+
+    .table-wrapper {
+      overflow: auto;
+      max-inline-size: 100%;
+      max-block-size: 320px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      container-type: inline-size;
+      margin-block: 0.4rem 0.6rem;
+    }
+
+    .bday-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.9rem;
+    }
+
+    .bday-table thead {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 1;
+      background: var(--surface-alt);
+    }
+
+    .bday-table th,
+    .bday-table td {
+      padding: 0.45rem 0.6rem;
+      border-block-end: 1px solid var(--border);
+      text-align: start;
+      vertical-align: middle;
+    }
+
+    .bday-table tbody th {
+      font-weight: 600;
+      position: sticky;
+      inset-inline-start: 0;
+      background: var(--surface);
+    }
+
+    @container (width < 520px) {
+      .bday-table,
+      .bday-table thead,
+      .bday-table tbody,
+      .bday-table tr,
+      .bday-table th,
+      .bday-table td {
+        display: block;
+      }
+
+      .bday-table thead {
+        display: none;
+      }
+
+      .bday-table tr {
+        margin-block-end: 0.5rem;
+        border-block-end: 2px solid var(--border);
+      }
+
+      .bday-table tbody th {
+        position: sticky;
+        inset-block-start: 0;
+        z-index: 2;
+        background: var(--surface-alt);
+      }
+
+      .bday-table {
+        --col-date: "Date";
+        --col-year: "Birth Year";
+        --col-theme: "Theme";
+      }
+
+      .bday-table td[data-col="date"]::before {
+        content: var(--col-date) ": ";
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .bday-table td[data-col="year"]::before {
+        content: var(--col-year) ": ";
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .bday-table td[data-col="theme"]::before {
+        content: var(--col-theme) ": ";
+        font-weight: 600;
+        color: var(--muted);
+      }
+    }
+
+    /* Diagnostics Grid */
     .diag-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -610,221 +1100,231 @@
 <body>
   <div class="container">
     <header class="hero">
-      <h1 id="page-title">Clean Slate Display</h1>
-      <p class="subtitle">Local Wi-Fi onboarding, favorite team selection, and display settings.</p>
+      <div>
+        <h1 id="page-title">Clean Slate Display</h1>
+        <p class="subtitle">Local preview, app configuration, Wi-Fi onboarding, and server diagnostics.</p>
+      </div>
       <ul class="pills" aria-label="Device status">
         <li class="pill" id="pill-mode">Mode: Loading...</li>
         <li class="pill" id="pill-ip">IP: --</li>
         <li class="pill" id="pill-device">ID: --</li>
         <li class="pill" id="pill-app">App: --</li>
+        <li class="pill" id="pill-alarm" hidden>Alarm: --</li>
       </ul>
+      <nav class="site-nav" aria-label="Configuration pages">
+        <ul class="nav-list">
+          <li><a href="#preview" class="nav-link" data-nav="preview" aria-current="page">Preview &amp; Control</a></li>
+          <li><a href="#apps" class="nav-link" data-nav="apps">Apps <span class="nav-badge" id="nav-apps-count" hidden>0</span></a></li>
+          <li><a href="#device" class="nav-link" data-nav="device">Device &amp; Display</a></li>
+          <li><a href="#wifi" class="nav-link" data-nav="wifi">Wi-Fi <span class="nav-badge" id="nav-wifi-badge" hidden>Setup</span></a></li>
+          <li><a href="#server" class="nav-link" data-nav="server">Server Tests <span class="nav-badge" id="nav-server-badge" hidden>--</span></a></li>
+        </ul>
+      </nav>
     </header>
 
     <div id="live-status" class="status-banner" role="status" aria-live="polite">
       Loading device state...
     </div>
 
-    <main>
-      <details id="wifi-details" open>
-        <summary>Wi-Fi Network &amp; Onboarding Setup</summary>
-        <section id="setup-wrapper" aria-labelledby="setup-heading">
-          <h2 id="setup-heading">Initial Wi-Fi &amp; Favorite Team Setup</h2>
-          <p class="subtitle">Connect this display to your 2.4 GHz Wi-Fi network and choose your favorite college football team.</p>
+    <div id="alarm-ringing-banner" class="alarm-ringing-bar" role="alert" hidden>
+      <span>Alarm is ringing on Clean Slate!</span>
+      <button type="button" id="btn-dismiss-alarm-banner" class="danger">Dismiss Alarm</button>
+    </div>
 
-        <form id="setup-form" aria-labelledby="setup-heading" novalidate>
+    <main class="spa-views">
+      <!-- Page 1: Preview & Control -->
+      <section class="spa-view" id="view-preview" data-page="preview" aria-labelledby="preview-heading">
+        <div class="card">
+          <h2 id="preview-heading" tabindex="-1">Live Display Mirror &amp; Quick Switch</h2>
+          <div class="matrix-bezel">
+            <canvas id="matrix-preview" width="64" height="32" role="img" aria-label="Live 64 by 32 LED matrix output"></canvas>
+          </div>
+          <div class="quick-row">
+            <label for="quick-app" class="visually-hidden">Quick Screen Mode</label>
+            <select id="quick-app" aria-label="Quick switch active screen">
+              <option value="">Auto Schedule (recommended)</option>
+            </select>
+            <button type="button" id="btn-toggle-live" aria-pressed="true">Pause Mirror</button>
+          </div>
+          <p class="hint" id="preview-telemetry-hint" style="margin-block-start: 0.65rem;">Brightness &amp; firmware telemetry loading...</p>
+        </div>
+
+        <div class="card" aria-labelledby="controls-heading">
+          <h2 id="controls-heading">Quick Audio &amp; Device Controls</h2>
+
+          <div class="control-group" style="margin-block-start: 0;">
+            <div class="control-group-label">Volume &amp; Playback</div>
+            <div class="btn-bar">
+              <button type="button" id="btn-vol-down">Vol &minus;</button>
+              <button type="button" id="btn-vol-mute">Mute</button>
+              <button type="button" id="btn-vol-up">Vol &plus;</button>
+              <button type="button" id="btn-play-fight">Play Fight Song</button>
+              <button type="button" id="btn-play-victory">Play Victory Song</button>
+              <button type="button" id="btn-play-third">Play 3rd Song</button>
+              <button type="button" id="btn-test-boot">Test Boot Tone</button>
+              <button type="button" id="btn-test-chime">Test Chime</button>
+              <button type="button" id="btn-stop-audio">Stop Audio</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-group-label">Display &amp; System</div>
+            <div class="btn-bar">
+              <a href="/remote" class="nav-link" style="border: 1px solid var(--accent); background: var(--surface);">Open Simple Remote (/remote)</a>
+              <button type="button" id="btn-refresh">Refresh Display Now</button>
+              <button type="button" id="btn-check-ota">Check Firmware Update</button>
+              <button type="button" id="btn-reboot">Reboot Device</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" aria-labelledby="home-alarms-heading">
+          <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.5rem;">
+            <h2 id="home-alarms-heading" style="margin:0;">Scheduled Alarms</h2>
+            <button type="button" id="btn-manage-alarms" class="small">Manage Alarms</button>
+          </div>
+          <p class="hint" id="home-alarms-summary" style="margin-block:0.45rem 0;">Loading alarms from server...</p>
+          <ul id="home-alarms-list" class="alarm-summary-list" hidden></ul>
+        </div>
+      </section>
+
+      <!-- Page 2: App Configuration (Multi-App Ready) -->
+      <section class="spa-view inactive" id="view-apps" data-page="apps" aria-labelledby="apps-heading" aria-hidden="true" inert>
+        <form id="apps-form" class="card" aria-labelledby="apps-heading" novalidate>
+          <h2 id="apps-heading" tabindex="-1">App Configuration</h2>
+          <p class="subtitle">Enable 0 to many apps, configure conflict &amp; rotation mode, and customize per-app settings and schedules.</p>
+
           <fieldset>
-            <legend>Wi-Fi Network</legend>
+            <legend>Active Screen, Sports Teams &amp; Conflict Resolution</legend>
 
-            <div class="field">
-              <label for="scan-select">Nearby 2.4 GHz Networks</label>
-              <span id="scan-hint" class="hint">Select a scanned network below or type your SSID manually.</span>
-              <div class="input-row">
-                <select id="scan-select" aria-describedby="scan-hint">
-                  <option value="">-- Press Scan to find networks --</option>
+            <div class="field-row">
+              <div class="field">
+                <label for="cfg-pinned-app">Active Screen Mode</label>
+                <select id="cfg-pinned-app" name="pinned_app">
+                  <option value="">Auto Schedule (recommended)</option>
                 </select>
-                <button type="button" id="btn-scan">Scan</button>
+              </div>
+
+              <div class="field">
+                <label for="cfg-selection-mode">App Conflict Mode</label>
+                <select id="cfg-selection-mode" name="selection_mode">
+                  <option value="priority">Strict Priority (highest priority wins)</option>
+                  <option value="rotate">Timed Rotation (cycle eligible apps)</option>
+                </select>
               </div>
             </div>
 
-            <div class="field">
-              <label for="setup-ssid">Wi-Fi Network Name (SSID) <span aria-hidden="true">*</span></label>
-              <span id="ssid-hint" class="hint">Required. Enter your 2.4 GHz Wi-Fi name (1 to 32 characters).</span>
-              <input type="text" id="setup-ssid" name="wifi_ssid" required maxlength="32"
-                     autocorrect="off" autocapitalize="none" spellcheck="false"
-                     enterkeyhint="next" aria-describedby="ssid-hint" data-error="ssid-err">
-              <div id="ssid-err" class="error-msg">
-                <span role="img" aria-label="Error">❌</span> Enter your Wi-Fi network name (SSID).
+            <div class="field-row" id="rotation-controls-wrap" hidden>
+              <div class="field">
+                <label for="cfg-rotation-seconds">Rotation Interval (seconds)</label>
+                <p class="hint" id="rot-sec-hint">5 to 300 seconds per app when rotating (default: 20).</p>
+                <input type="number" id="cfg-rotation-seconds" name="rotation_seconds" min="5" max="300" step="1"
+                       value="20" inputmode="numeric" aria-describedby="rot-sec-hint">
+              </div>
+              <div class="field" style="justify-content: flex-end;">
+                <div class="check-row">
+                  <input type="checkbox" id="cfg-rotate-clock" name="rotate_include_clock">
+                  <label for="cfg-rotate-clock">Include Clock in Timed Rotation</label>
+                </div>
               </div>
             </div>
 
-            <div class="field">
-              <label for="setup-pass">Wi-Fi Password</label>
-              <span id="pass-hint" class="hint">Leave blank only for open networks.</span>
-              <div class="input-row">
-                <input type="password" id="setup-pass" name="wifi_pass" maxlength="64"
-                       autocomplete="current-password" enterkeyhint="next" aria-describedby="pass-hint">
-                <button type="button" id="toggle-pass" aria-pressed="false" aria-label="Show Wi-Fi password">Show</button>
+            <div class="field-row">
+              <div class="field">
+                <label for="cfg-team-preset">Favorite Team Quick Pick</label>
+                <select id="cfg-team-preset">
+                  <option value="">-- Custom / Keep Typed Value --</option>
+                  <option value="__clear__">-- Clear Favorite Teams (None) --</option>
+                  <optgroup label="College Football (CFB)">
+                    <option value="ALA">Alabama Crimson Tide (ALA)</option>
+                    <option value="AUB">Auburn Tigers (AUB)</option>
+                    <option value="CLEM">Clemson Tigers (CLEM)</option>
+                    <option value="FLA">Florida Gators (FLA)</option>
+                    <option value="FSU">Florida State Seminoles (FSU)</option>
+                    <option value="UGA">Georgia Bulldogs (UGA)</option>
+                    <option value="LSU">LSU Tigers (LSU)</option>
+                    <option value="MICH">Michigan Wolverines (MICH)</option>
+                    <option value="ND">Notre Dame Fighting Irish (ND)</option>
+                    <option value="OSU">Ohio State Buckeyes (OSU)</option>
+                    <option value="OU">Oklahoma Sooners (OU)</option>
+                    <option value="ORE">Oregon Ducks (ORE)</option>
+                    <option value="PSU">Penn State Nittany Lions (PSU)</option>
+                    <option value="TENN">Tennessee Volunteers (TENN)</option>
+                    <option value="TEX">Texas Longhorns (TEX)</option>
+                    <option value="TAMU">Texas A&amp;M Aggies (TAMU)</option>
+                    <option value="USC">USC Trojans (USC)</option>
+                    <option value="VAN">Vanderbilt Commodores (VAN)</option>
+                  </optgroup>
+                  <optgroup label="NCAA Men's Basketball (CBB)">
+                    <option value="ALA">Alabama Crimson Tide (ALA)</option>
+                    <option value="ARIZ">Arizona Wildcats (ARIZ)</option>
+                    <option value="AUB">Auburn Tigers (AUB)</option>
+                    <option value="CONN">UConn Huskies (CONN)</option>
+                    <option value="DUKE">Duke Blue Devils (DUKE)</option>
+                    <option value="FLA">Florida Gators (FLA)</option>
+                    <option value="GONZ">Gonzaga Bulldogs (GONZ)</option>
+                    <option value="HOU">Houston Cougars (HOU)</option>
+                    <option value="ISU">Iowa State Cyclones (ISU)</option>
+                    <option value="KU">Kansas Jayhawks (KU)</option>
+                    <option value="UK">Kentucky Wildcats (UK)</option>
+                    <option value="MSU">Michigan State Spartans (MSU)</option>
+                    <option value="UNC">North Carolina Tar Heels (UNC)</option>
+                    <option value="PUR">Purdue Boilermakers (PUR)</option>
+                    <option value="TENN">Tennessee Volunteers (TENN)</option>
+                  </optgroup>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="cfg-teams">Favorite Team Code(s)</label>
+                <input type="text" id="cfg-teams" name="favorite_teams"
+                       pattern="^([A-Za-z0-9]{2,6}(,[A-Za-z0-9]{2,6})*)?$"
+                       autocorrect="off" autocapitalize="characters" spellcheck="false"
+                       aria-describedby="cfg-teams-hint" data-error="cfg-teams-err">
+                <span id="cfg-teams-hint" class="hint">Comma-separated codes (e.g. ALA or ALA,DUKE), or leave blank for non-sports setups. CBB also supports a per-app override below.</span>
+                <div id="cfg-teams-err" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Enter comma-separated 2-6 letter team codes (e.g. ALA,DUKE) or leave empty.
+                </div>
               </div>
             </div>
           </fieldset>
 
-          <fieldset>
-            <legend>Favorite Team &amp; Cloud Server</legend>
-
-            <div class="field">
-              <label for="setup-team-preset">Team Quick Pick</label>
-              <span id="preset-hint" class="hint">Choose a team to fill its code below, or enter any ESPN abbreviation.</span>
-              <select id="setup-team-preset" aria-describedby="preset-hint">
-                <option value="">-- Custom / Keep Typed Value --</option>
-                <option value="ALA">Alabama Crimson Tide (ALA)</option>
-                <option value="AUB">Auburn Tigers (AUB)</option>
-                <option value="CLEM">Clemson Tigers (CLEM)</option>
-                <option value="FLA">Florida Gators (FLA)</option>
-                <option value="FSU">Florida State Seminoles (FSU)</option>
-                <option value="UGA">Georgia Bulldogs (UGA)</option>
-                <option value="LSU">LSU Tigers (LSU)</option>
-                <option value="MICH">Michigan Wolverines (MICH)</option>
-                <option value="ND">Notre Dame Fighting Irish (ND)</option>
-                <option value="OSU">Ohio State Buckeyes (OSU)</option>
-                <option value="OU">Oklahoma Sooners (OU)</option>
-                <option value="ORE">Oregon Ducks (ORE)</option>
-                <option value="PSU">Penn State Nittany Lions (PSU)</option>
-                <option value="TENN">Tennessee Volunteers (TENN)</option>
-                <option value="TEX">Texas Longhorns (TEX)</option>
-                <option value="TAMU">Texas A&amp;M Aggies (TAMU)</option>
-                <option value="USC">USC Trojans (USC)</option>
-                <option value="VAN">Vanderbilt Commodores (VAN)</option>
+          <fieldset id="cloud-apps-fieldset">
+            <legend>App Configuration, Priority &amp; Schedule</legend>
+            <div class="apps-summary-bar" style="margin-block-end: 0.75rem;">
+              <span class="hint" id="apps-enabled-summary">Loading installed apps...</span>
+              <div class="btn-bar" style="margin: 0;">
+                <button type="button" id="btn-reload-apps" class="small">Reload Apps</button>
+                <button type="button" id="btn-enable-all-apps" class="small">Enable All</button>
+                <button type="button" id="btn-clear-all-apps" class="small">Clear All (0 Apps)</button>
+              </div>
+            </div>
+            <div class="field" style="margin-block-end: 0.9rem;">
+              <label for="cfg-selected-app">Select App to Configure</label>
+              <select id="cfg-selected-app" name="selected_config_app" aria-describedby="cfg-selected-app-hint">
+                <option value="">Loading apps...</option>
               </select>
+              <span id="cfg-selected-app-hint" class="hint">Pick an app to enable it, adjust its settings, set its priority, or configure a custom schedule.</span>
             </div>
-
-            <div class="field">
-              <label for="setup-team">Favorite Team Code(s) <span aria-hidden="true">*</span></label>
-              <span id="team-hint" class="hint">Uppercase ESPN team abbreviation (e.g. ALA or ALA,TEX).</span>
-              <input type="text" id="setup-team" name="favorite_team" required
-                     pattern="[A-Za-z0-9]{2,6}(,[A-Za-z0-9]{2,6})*"
-                     autocorrect="off" autocapitalize="characters" spellcheck="false"
-                     enterkeyhint="next" aria-describedby="team-hint" data-error="setup-team-err">
-              <div id="setup-team-err" class="error-msg">
-                <span role="img" aria-label="Error">❌</span> Enter a valid 2-6 letter team code such as ALA or ALA,TEX.
-              </div>
-            </div>
-
-            <div class="field">
-              <label for="setup-api-url">Clean Slate Server URL <span aria-hidden="true">*</span></label>
-              <span id="api-hint" class="hint">Full base URL without a trailing slash (e.g. https://your-app.azurewebsites.net).</span>
-              <input type="url" id="setup-api-url" name="api_base_url" required
-                     autocorrect="off" autocapitalize="none" spellcheck="false"
-                     enterkeyhint="done" aria-describedby="api-hint" data-error="setup-url-err">
-              <div id="setup-url-err" class="error-msg">
-                <span role="img" aria-label="Error">❌</span> Enter a valid http:// or https:// server URL.
-              </div>
+            <div id="cloud-apps-body">
+              <p class="hint">Connect to Wi-Fi and reach the Clean Slate server to load app schemas.</p>
             </div>
           </fieldset>
 
-          <button type="submit" id="btn-setup-submit" class="primary">Save Wi-Fi &amp; Connect</button>
+          <button type="submit" id="btn-apps-submit" class="primary">Save App Settings &amp; Sync</button>
         </form>
-        </section>
-      </details>
-
-      <section class="card matrix-card" id="preview-card" aria-labelledby="preview-heading">
-        <h2 id="preview-heading">Live Display Mirror &amp; Quick Switch</h2>
-        <div class="matrix-bezel">
-          <canvas id="matrix-preview" width="64" height="32" role="img" aria-label="Live 64 by 32 LED matrix output"></canvas>
-        </div>
-        <div class="quick-row">
-          <label for="quick-app" class="visually-hidden">Quick Screen Mode</label>
-          <select id="quick-app" aria-label="Quick switch active screen">
-            <option value="">Auto Schedule (recommended)</option>
-          </select>
-          <button type="button" id="btn-toggle-live" aria-pressed="true">Pause Mirror</button>
-        </div>
       </section>
 
-      <section class="card" id="diag-card" aria-labelledby="diag-heading">
-        <h2 id="diag-heading">Server Connection &amp; Diagnostics</h2>
-        <p class="hint">Monitor live server polling from the ESP32 or test any Clean Slate server URL (DNS, TLS certificate chain, <code>/api/v1/apps</code>, and device <code>/config</code>).</p>
+      <!-- Page 3: Device & Display Settings -->
+      <section class="spa-view inactive" id="view-device" data-page="device" aria-labelledby="settings-heading" aria-hidden="true" inert>
+        <form id="settings-form" class="card" aria-labelledby="settings-heading" novalidate>
+          <h2 id="settings-heading" tabindex="-1">Device &amp; Display Settings</h2>
 
-        <dl class="diag-grid">
-          <div class="diag-stat">
-            <dt>Background Poll</dt>
-            <dd id="diag-poll-state">Loading...</dd>
-          </div>
-          <div class="diag-stat">
-            <dt>Last API Result</dt>
-            <dd id="diag-last-api">--</dd>
-          </div>
-          <div class="diag-stat">
-            <dt>Wi-Fi &amp; DNS Server</dt>
-            <dd id="diag-net-info">--</dd>
-          </div>
-          <div class="diag-stat">
-            <dt>Saved Server URL</dt>
-            <dd id="diag-saved-url">--</dd>
-          </div>
-        </dl>
-
-        <div class="field">
-          <label for="diag-test-url">Server URL to Test</label>
-          <div class="diag-action-row">
-            <input type="url" id="diag-test-url" autocorrect="off" autocapitalize="none" spellcheck="false"
-                   placeholder="https://your-app.azurewebsites.net">
-            <button type="button" id="btn-test-server" class="primary">Test Server Connection</button>
-            <button type="button" id="btn-apply-diag-url" hidden>Use in Settings</button>
-            <progress id="diag-spinner" class="loading-spinner" hidden aria-label="Testing server connection"></progress>
-          </div>
-        </div>
-
-        <ul class="diag-list" id="diag-steps" aria-live="polite">
-          <li class="diag-item">
-            <div class="diag-item-main">
-              <div class="diag-item-title">1. Wi-Fi &amp; Network</div>
-              <div class="diag-item-detail" id="step-wifi-detail">Waiting for status...</div>
-            </div>
-            <span class="diag-badge" id="step-wifi-badge">Ready</span>
-          </li>
-          <li class="diag-item">
-            <div class="diag-item-main">
-              <div class="diag-item-title">2. URL Validation</div>
-              <div class="diag-item-detail" id="step-url-detail">Enter a full http:// or https:// URL and press Test Server Connection.</div>
-            </div>
-            <span class="diag-badge" id="step-url-badge">Ready</span>
-          </li>
-          <li class="diag-item">
-            <div class="diag-item-main">
-              <div class="diag-item-title">3. DNS Lookup</div>
-              <div class="diag-item-detail" id="step-dns-detail">Not tested yet.</div>
-            </div>
-            <span class="diag-badge" id="step-dns-badge">Ready</span>
-          </li>
-          <li class="diag-item">
-            <div class="diag-item-main">
-              <div class="diag-item-title">4. HTTPS / TLS &amp; /api/v1/apps</div>
-              <div class="diag-item-detail" id="step-apps-detail">Not tested yet.</div>
-            </div>
-            <span class="diag-badge" id="step-apps-badge">Ready</span>
-          </li>
-          <li class="diag-item">
-            <div class="diag-item-main">
-              <div class="diag-item-title">5. Device Endpoint (/config)</div>
-              <div class="diag-item-detail" id="step-cfg-detail">Not tested yet.</div>
-            </div>
-            <span class="diag-badge" id="step-cfg-badge">Ready</span>
-          </li>
-        </ul>
-
-        <div id="diag-hint" class="status-banner" role="status" aria-live="polite">
-          Press &ldquo;Test Server Connection&rdquo; to diagnose DNS, TLS, and backend reachability directly from the ESP32.
-        </div>
-      </section>
-
-      <section id="settings-section" class="card" aria-labelledby="settings-heading">
-        <h2 id="settings-heading">Device &amp; Display Settings</h2>
-        <form id="settings-form" aria-labelledby="settings-heading" novalidate>
           <fieldset>
-            <legend>Team &amp; Cloud Connection</legend>
+            <legend>Identity &amp; Time</legend>
 
             <div class="field">
-              <label for="cfg-name">Device Display Name</label>
+              <label for="cfg-name">Device Display Name <span aria-hidden="true">*</span></label>
               <input type="text" id="cfg-name" name="device_name" maxlength="44" required
                      data-error="cfg-name-err">
               <div id="cfg-name-err" class="error-msg">
@@ -832,72 +1332,27 @@
               </div>
             </div>
 
-            <div class="field">
-              <label for="cfg-team-preset">Favorite Team Quick Pick</label>
-              <select id="cfg-team-preset">
-                <option value="">-- Custom / Keep Typed Value --</option>
-                <option value="ALA">Alabama Crimson Tide (ALA)</option>
-                <option value="AUB">Auburn Tigers (AUB)</option>
-                <option value="CLEM">Clemson Tigers (CLEM)</option>
-                <option value="FLA">Florida Gators (FLA)</option>
-                <option value="FSU">Florida State Seminoles (FSU)</option>
-                <option value="UGA">Georgia Bulldogs (UGA)</option>
-                <option value="LSU">LSU Tigers (LSU)</option>
-                <option value="MICH">Michigan Wolverines (MICH)</option>
-                <option value="ND">Notre Dame Fighting Irish (ND)</option>
-                <option value="OSU">Ohio State Buckeyes (OSU)</option>
-                <option value="OU">Oklahoma Sooners (OU)</option>
-                <option value="ORE">Oregon Ducks (ORE)</option>
-                <option value="PSU">Penn State Nittany Lions (PSU)</option>
-                <option value="TENN">Tennessee Volunteers (TENN)</option>
-                <option value="TEX">Texas Longhorns (TEX)</option>
-                <option value="TAMU">Texas A&amp;M Aggies (TAMU)</option>
-                <option value="USC">USC Trojans (USC)</option>
-                <option value="VAN">Vanderbilt Commodores (VAN)</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <label for="cfg-teams">Favorite Team Code(s) <span aria-hidden="true">*</span></label>
-              <span id="cfg-teams-hint" class="hint">Comma-separated abbreviations (e.g. ALA or ALA,TEX). Synced directly to the server.</span>
-              <input type="text" id="cfg-teams" name="favorite_teams" required
-                     pattern="[A-Za-z0-9]{2,6}(,[A-Za-z0-9]{2,6})*"
-                     autocorrect="off" autocapitalize="characters" spellcheck="false"
-                     aria-describedby="cfg-teams-hint" data-error="cfg-teams-err">
-              <div id="cfg-teams-err" class="error-msg">
-                <span role="img" aria-label="Error">❌</span> Enter valid comma-separated team codes (e.g. ALA).
+            <div class="field-row">
+              <div class="field">
+                <label for="cfg-tz">Timezone (IANA)</label>
+                <select id="cfg-tz" name="timezone">
+                  <option value="America/New_York">Eastern (America/New_York)</option>
+                  <option value="America/Chicago">Central (America/Chicago)</option>
+                  <option value="America/Denver">Mountain (America/Denver)</option>
+                  <option value="America/Phoenix">Arizona (America/Phoenix)</option>
+                  <option value="America/Los_Angeles">Pacific (America/Los_Angeles)</option>
+                  <option value="America/Anchorage">Alaska (America/Anchorage)</option>
+                  <option value="Pacific/Honolulu">Hawaii (Pacific/Honolulu)</option>
+                  <option value="UTC">UTC</option>
+                </select>
               </div>
-            </div>
 
-            <div class="field">
-              <label for="cfg-api-url">Clean Slate Server URL <span aria-hidden="true">*</span></label>
-              <div class="input-row">
-                <input type="url" id="cfg-api-url" name="api_base_url" required
+              <div class="field">
+                <label for="cfg-ntp-server">NTP Time Server</label>
+                <input type="text" id="cfg-ntp-server" name="ntp_server" maxlength="63"
                        autocorrect="off" autocapitalize="none" spellcheck="false"
-                       data-error="cfg-url-err">
-                <button type="button" id="btn-test-cfg-url">Test URL</button>
+                       placeholder="pool.ntp.org">
               </div>
-              <div id="cfg-url-err" class="error-msg">
-                <span role="img" aria-label="Error">❌</span> Enter a valid http:// or https:// server URL.
-              </div>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>Timezone &amp; Quiet Hours</legend>
-
-            <div class="field">
-              <label for="cfg-tz">Timezone (IANA)</label>
-              <select id="cfg-tz" name="timezone">
-                <option value="America/New_York">Eastern (America/New_York)</option>
-                <option value="America/Chicago">Central (America/Chicago)</option>
-                <option value="America/Denver">Mountain (America/Denver)</option>
-                <option value="America/Phoenix">Arizona (America/Phoenix)</option>
-                <option value="America/Los_Angeles">Pacific (America/Los_Angeles)</option>
-                <option value="America/Anchorage">Alaska (America/Anchorage)</option>
-                <option value="Pacific/Honolulu">Hawaii (Pacific/Honolulu)</option>
-                <option value="UTC">UTC</option>
-              </select>
             </div>
 
             <div class="field">
@@ -907,57 +1362,20 @@
               </div>
             </div>
 
-            <div class="field">
-              <label for="cfg-quiet-start">Quiet Hours Start</label>
-              <input type="time" id="cfg-quiet-start" name="quiet_start" value="23:00">
-            </div>
-
-            <div class="field">
-              <label for="cfg-quiet-end">Quiet Hours End</label>
-              <input type="time" id="cfg-quiet-end" name="quiet_end" value="07:00">
-            </div>
-
-            <div class="field">
-              <label for="cfg-ntp-server">NTP Time Server</label>
-              <p class="hint" id="ntp-server-hint">Hostname or IP for SNTP wall-clock sync (default: pool.ntp.org).</p>
-              <input type="text" id="cfg-ntp-server" name="ntp_server" maxlength="63"
-                     autocorrect="off" autocapitalize="none" spellcheck="false"
-                     placeholder="pool.ntp.org" aria-describedby="ntp-server-hint">
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>Sync &amp; Firmware</legend>
-
-            <div class="field">
-              <label for="cfg-poll-sec">Server Poll Interval (seconds)</label>
-              <p class="hint" id="poll-sec-hint">How often the display polls Clean Slate for new frames (1 to 3600s).</p>
-              <input type="number" id="cfg-poll-sec" name="poll_interval_sec" min="1" max="3600" step="1"
-                     value="10" inputmode="numeric" aria-describedby="poll-sec-hint">
-            </div>
-
-            <div class="field">
-              <div class="check-row">
-                <input type="checkbox" id="cfg-ota-en" name="ota_enabled">
-                <label for="cfg-ota-en">Allow Automatic OTA Firmware Updates</label>
+            <div class="field-row">
+              <div class="field">
+                <label for="cfg-quiet-start">Quiet Hours Start</label>
+                <input type="time" id="cfg-quiet-start" name="quiet_start" value="23:00">
               </div>
-              <p class="hint" id="fw-version-hint">Firmware status loading...</p>
+              <div class="field">
+                <label for="cfg-quiet-end">Quiet Hours End</label>
+                <input type="time" id="cfg-quiet-end" name="quiet_end" value="07:00">
+              </div>
             </div>
           </fieldset>
 
           <fieldset>
-            <legend>Display &amp; Audio</legend>
-
-            <div class="field">
-              <label for="cfg-pinned-app">Active Screen Mode</label>
-              <select id="cfg-pinned-app" name="pinned_app">
-                <option value="">Auto Schedule (recommended)</option>
-                <option value="clock">Clock</option>
-                <option value="cfb_scoreboard">Scoreboard / Pregame</option>
-                <option value="cfb_countdown_clock">Pregame Current Time</option>
-                <option value="cfb_gameday_info">TV &amp; Weather Info</option>
-              </select>
-            </div>
+            <legend>Display Brightness &amp; Controls</legend>
 
             <div class="field">
               <div class="check-row">
@@ -987,39 +1405,48 @@
             </div>
 
             <div class="field">
-              <label for="cfg-df-vol">DFPlayer Master Volume (<span id="vol-readout">18</span> / 30)</label>
-              <p class="hint" id="df-vol-hint">0 = Muted. Controls manual songs, game alerts, startup tone, and hourly chimes.</p>
-              <input type="range" id="cfg-df-vol" name="df_volume" min="0" max="30" value="18" aria-describedby="df-vol-hint">
-            </div>
-
-            <div class="field">
-              <label for="cfg-df-eq">DFPlayer Equalizer Preset</label>
-              <select id="cfg-df-eq" name="df_eq">
-                <option value="0">Normal (Default)</option>
-                <option value="1">Pop</option>
-                <option value="2">Rock</option>
-                <option value="3">Jazz</option>
-                <option value="4">Classic</option>
-                <option value="5">Bass</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <div class="check-row">
-                <input type="checkbox" id="cfg-boot-tone" name="boot_tone">
-                <label for="cfg-boot-tone">Play Startup Tone on Boot</label>
-              </div>
-              <div class="check-row">
-                <input type="checkbox" id="cfg-hourly-chime" name="hourly_chime">
-                <label for="cfg-hourly-chime">Play Hourly Chime Outside Quiet Hours</label>
-              </div>
-            </div>
-
-            <div class="field">
-              <label for="cfg-rotary-idle">Knob Return-to-Auto Delay (seconds)</label>
+              <label for="cfg-rotary-idle">Rotary Knob Return-to-Auto Delay (seconds)</label>
               <p class="hint" id="rotary-idle-hint">After turning the knob to browse screens, return to Auto Schedule after this many seconds (0 stays pinned).</p>
               <input type="number" id="cfg-rotary-idle" name="rotary_idle_sec" min="0" max="600" step="1"
                      value="30" inputmode="numeric" aria-describedby="rotary-idle-hint">
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Audio &amp; Button Mapping</legend>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="cfg-df-vol">DFPlayer Master Volume (<span id="vol-readout">18</span> / 30)</label>
+                <p class="hint" id="df-vol-hint">0 = Muted. Applies immediately.</p>
+                <input type="range" id="cfg-df-vol" name="df_volume" min="0" max="30" value="18" aria-describedby="df-vol-hint">
+              </div>
+              <div class="field">
+                <label for="cfg-df-eq">Audio Equalizer Preset</label>
+                <select id="cfg-df-eq" name="df_eq">
+                  <option value="0">Normal (Default)</option>
+                  <option value="1">Pop</option>
+                  <option value="2">Rock</option>
+                  <option value="3">Jazz</option>
+                  <option value="4">Classic</option>
+                  <option value="5">Bass Boost</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <div class="check-row">
+                  <input type="checkbox" id="cfg-boot-tone" name="boot_tone">
+                  <label for="cfg-boot-tone">Play Startup Tone on Boot</label>
+                </div>
+              </div>
+              <div class="field">
+                <div class="check-row">
+                  <input type="checkbox" id="cfg-hourly-chime" name="hourly_chime">
+                  <label for="cfg-hourly-chime">Play Hourly Chime</label>
+                </div>
+              </div>
             </div>
 
             <details>
@@ -1027,9 +1454,9 @@
               <div class="field-row">
                 <div class="field">
                   <label for="cfg-fight-folder">Fight Song Folder</label>
-                  <p class="hint" id="fight-folder-hint">0 = legacy global track index; 1 = /01/ folder.</p>
+                  <p class="hint" id="fight-folder-hint">1 = /01/ folder (recommended); 0 = legacy global copy-order index.</p>
                   <input type="number" id="cfg-fight-folder" name="fight_folder" min="0" max="99" step="1"
-                         value="0" inputmode="numeric" aria-describedby="fight-folder-hint">
+                         value="1" inputmode="numeric" aria-describedby="fight-folder-hint">
                 </div>
                 <div class="field">
                   <label for="cfg-fight-track">Fight Song Track # (1 Click)</label>
@@ -1041,9 +1468,9 @@
               <div class="field-row">
                 <div class="field">
                   <label for="cfg-victory-folder">Victory Song Folder</label>
-                  <p class="hint" id="victory-folder-hint">0 = legacy global track index; 1 = /01/ folder.</p>
+                  <p class="hint" id="victory-folder-hint">1 = /01/ folder (recommended); 0 = legacy global copy-order index.</p>
                   <input type="number" id="cfg-victory-folder" name="victory_folder" min="0" max="99" step="1"
-                         value="0" inputmode="numeric" aria-describedby="victory-folder-hint">
+                         value="1" inputmode="numeric" aria-describedby="victory-folder-hint">
                 </div>
                 <div class="field">
                   <label for="cfg-victory-track">Victory Song Track # (2 Clicks)</label>
@@ -1055,9 +1482,9 @@
               <div class="field-row">
                 <div class="field">
                   <label for="cfg-third-folder">3rd Song Folder</label>
-                  <p class="hint" id="third-folder-hint">0 = legacy global track index; 1 = /01/ folder.</p>
+                  <p class="hint" id="third-folder-hint">1 = /01/ folder (recommended); 0 = legacy global copy-order index.</p>
                   <input type="number" id="cfg-third-folder" name="third_folder" min="0" max="99" step="1"
-                         value="0" inputmode="numeric" aria-describedby="third-folder-hint">
+                         value="1" inputmode="numeric" aria-describedby="third-folder-hint">
                 </div>
                 <div class="field">
                   <label for="cfg-third-track">3rd Song Track # (3 Clicks)</label>
@@ -1069,37 +1496,246 @@
             </details>
           </fieldset>
 
-          <fieldset id="cloud-apps-fieldset">
-            <legend>Server App Preferences</legend>
-            <div id="cloud-apps-body">
-              <p class="hint">Connect to Wi-Fi and reach the Clean Slate server to load dynamic app settings.</p>
+          <fieldset>
+            <legend>Sync &amp; Firmware</legend>
+
+            <div class="field">
+              <label for="cfg-poll-sec">Server Poll Interval (seconds)</label>
+              <p class="hint" id="poll-sec-hint">How often the display polls Clean Slate for new frames (1 to 3600s).</p>
+              <input type="number" id="cfg-poll-sec" name="poll_interval_sec" min="1" max="3600" step="1"
+                     value="15" inputmode="numeric" aria-describedby="poll-sec-hint">
+            </div>
+
+            <div class="field">
+              <div class="check-row">
+                <input type="checkbox" id="cfg-ota-en" name="ota_enabled">
+                <label for="cfg-ota-en">Allow Automatic OTA Firmware Updates</label>
+              </div>
+              <p class="hint" id="fw-version-hint">Firmware status loading...</p>
             </div>
           </fieldset>
 
-          <button type="submit" id="btn-settings-submit" class="primary">Save Settings &amp; Sync</button>
+          <div class="btn-bar">
+            <button type="submit" id="btn-settings-submit" class="primary">Save Settings &amp; Sync</button>
+            <button type="button" id="btn-export-cfg">Export Config</button>
+            <button type="button" id="btn-import-cfg">Import Config</button>
+            <input type="file" id="import-file" accept=".json,application/json" hidden>
+            <button type="button" id="btn-factory-reset" class="danger">Factory Reset</button>
+          </div>
         </form>
       </section>
 
-      <section class="card" aria-labelledby="actions-heading">
-        <h2 id="actions-heading">Device &amp; Audio Controls</h2>
-        <div class="btn-bar">
-          <button type="button" id="btn-vol-down">Vol &minus;</button>
-          <button type="button" id="btn-vol-mute">Mute</button>
-          <button type="button" id="btn-vol-up">Vol &plus;</button>
-          <button type="button" id="btn-play-fight">Play Fight Song</button>
-          <button type="button" id="btn-play-victory">Play Victory Song</button>
-          <button type="button" id="btn-play-third">Play 3rd Song</button>
-          <button type="button" id="btn-test-boot">Test Boot Tone</button>
-          <button type="button" id="btn-test-chime">Test Chime</button>
-          <button type="button" id="btn-stop-audio">Stop Audio</button>
-          <button type="button" id="btn-refresh">Refresh Display Now</button>
-          <button type="button" id="btn-check-ota">Check Firmware Update</button>
-          <button type="button" id="btn-export-cfg">Export Config</button>
-          <button type="button" id="btn-import-cfg">Import Config</button>
-          <input type="file" id="import-file" accept=".json,application/json" hidden>
-          <button type="button" id="btn-reboot">Reboot Device</button>
-          <button type="button" id="btn-reset-wifi" class="danger">Change / Reset Wi-Fi</button>
-          <button type="button" id="btn-factory-reset" class="danger">Factory Reset</button>
+      <!-- Page 4: Wi-Fi Settings -->
+      <section class="spa-view inactive" id="view-wifi" data-page="wifi" aria-labelledby="wifi-heading" aria-hidden="true" inert>
+        <div class="card">
+          <h2 id="wifi-heading" tabindex="-1">Wi-Fi Settings &amp; Onboarding</h2>
+          <dl class="diag-grid">
+            <div class="diag-stat">
+              <dt>Connection State</dt>
+              <dd id="wifi-page-state">Loading...</dd>
+            </div>
+            <div class="diag-stat">
+              <dt>IP &amp; DNS</dt>
+              <dd id="wifi-page-ip">--</dd>
+            </div>
+            <div class="diag-stat">
+              <dt>Signal Strength</dt>
+              <dd id="wifi-page-rssi">--</dd>
+            </div>
+            <div class="diag-stat">
+              <dt>Fallback Setup AP</dt>
+              <dd id="wifi-page-ap">--</dd>
+            </div>
+          </dl>
+
+          <form id="setup-form" aria-label="Wi-Fi and initial setup" novalidate>
+            <fieldset>
+              <legend>Wi-Fi Network Credentials</legend>
+
+              <div class="field">
+                <label for="scan-select">Nearby 2.4 GHz Networks</label>
+                <span id="scan-hint" class="hint">Press Scan to discover nearby networks or type your SSID manually.</span>
+                <div class="input-row">
+                  <select id="scan-select" aria-describedby="scan-hint">
+                    <option value="">-- Press Scan to find networks --</option>
+                  </select>
+                  <button type="button" id="btn-scan">Scan</button>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="setup-ssid">Wi-Fi Network Name (SSID) <span aria-hidden="true">*</span></label>
+                <span id="ssid-hint" class="hint">Required. Enter your 2.4 GHz Wi-Fi name (1 to 32 characters).</span>
+                <input type="text" id="setup-ssid" name="wifi_ssid" required maxlength="32"
+                       autocorrect="off" autocapitalize="none" spellcheck="false"
+                       enterkeyhint="next" aria-describedby="ssid-hint" data-error="ssid-err">
+                <div id="ssid-err" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Enter your Wi-Fi network name (SSID).
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="setup-pass">Wi-Fi Password</label>
+                <span id="pass-hint" class="hint">Leave blank only for open networks.</span>
+                <div class="input-row">
+                  <input type="password" id="setup-pass" name="wifi_pass" maxlength="64"
+                         autocomplete="current-password" enterkeyhint="next" aria-describedby="pass-hint">
+                  <button type="button" id="toggle-pass" aria-pressed="false" aria-label="Show Wi-Fi password">Show</button>
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Initial Onboarding Server &amp; Team</legend>
+
+              <div class="field">
+                <label for="setup-team-preset">Team Quick Pick</label>
+                <select id="setup-team-preset">
+                  <option value="">-- Custom / Keep Typed Value --</option>
+                  <option value="ALA">Alabama Crimson Tide (ALA)</option>
+                  <option value="AUB">Auburn Tigers (AUB)</option>
+                  <option value="CLEM">Clemson Tigers (CLEM)</option>
+                  <option value="FLA">Florida Gators (FLA)</option>
+                  <option value="FSU">Florida State Seminoles (FSU)</option>
+                  <option value="UGA">Georgia Bulldogs (UGA)</option>
+                  <option value="LSU">LSU Tigers (LSU)</option>
+                  <option value="MICH">Michigan Wolverines (MICH)</option>
+                  <option value="ND">Notre Dame Fighting Irish (ND)</option>
+                  <option value="OSU">Ohio State Buckeyes (OSU)</option>
+                  <option value="OU">Oklahoma Sooners (OU)</option>
+                  <option value="ORE">Oregon Ducks (ORE)</option>
+                  <option value="PSU">Penn State Nittany Lions (PSU)</option>
+                  <option value="TENN">Tennessee Volunteers (TENN)</option>
+                  <option value="TEX">Texas Longhorns (TEX)</option>
+                  <option value="TAMU">Texas A&amp;M Aggies (TAMU)</option>
+                  <option value="USC">USC Trojans (USC)</option>
+                  <option value="VAN">Vanderbilt Commodores (VAN)</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="setup-team">Favorite Team Code(s) <span aria-hidden="true">*</span></label>
+                <input type="text" id="setup-team" name="favorite_team" required
+                       pattern="[A-Za-z0-9]{2,6}(,[A-Za-z0-9]{2,6})*"
+                       autocorrect="off" autocapitalize="characters" spellcheck="false"
+                       enterkeyhint="next" data-error="setup-team-err">
+                <div id="setup-team-err" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Enter a valid 2-6 letter team code such as ALA or ALA,TEX.
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="setup-api-url">Clean Slate Server URL <span aria-hidden="true">*</span></label>
+                <input type="url" id="setup-api-url" name="api_base_url" required
+                       autocorrect="off" autocapitalize="none" spellcheck="false"
+                       enterkeyhint="done" data-error="setup-url-err">
+                <div id="setup-url-err" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Enter a valid http:// or https:// server URL.
+                </div>
+              </div>
+            </fieldset>
+
+            <div class="btn-bar">
+              <button type="submit" id="btn-setup-submit" class="primary">Save Wi-Fi &amp; Connect</button>
+              <button type="button" id="btn-reset-wifi" class="danger">Clear Wi-Fi &amp; Start Setup AP</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Page 5: Server Tests & Connection -->
+      <section class="spa-view inactive" id="view-server" data-page="server" aria-labelledby="diag-heading" aria-hidden="true" inert>
+        <div class="card" id="diag-card">
+          <h2 id="diag-heading" tabindex="-1">Server Connection &amp; Diagnostics</h2>
+          <p class="hint">Monitor live server polling from the ESP32 or test any Clean Slate server URL (DNS, TLS certificate chain, <code>/api/v1/apps</code>, and device <code>/config</code>).</p>
+
+          <dl class="diag-grid">
+            <div class="diag-stat">
+              <dt>Background Poll</dt>
+              <dd id="diag-poll-state">Loading...</dd>
+            </div>
+            <div class="diag-stat">
+              <dt>Last API Result</dt>
+              <dd id="diag-last-api">--</dd>
+            </div>
+            <div class="diag-stat">
+              <dt>Wi-Fi &amp; DNS Server</dt>
+              <dd id="diag-net-info">--</dd>
+            </div>
+            <div class="diag-stat">
+              <dt>Saved Server URL</dt>
+              <dd id="diag-saved-url">--</dd>
+            </div>
+          </dl>
+
+          <form id="server-url-form" novalidate style="margin-block: 0.75rem;">
+            <div class="field">
+              <label for="cfg-api-url">Saved Clean Slate Server URL <span aria-hidden="true">*</span></label>
+              <div class="input-row">
+                <input type="url" id="cfg-api-url" name="api_base_url" required
+                       autocorrect="off" autocapitalize="none" spellcheck="false"
+                       data-error="cfg-url-err">
+                <button type="submit" id="btn-save-server-url">Save URL</button>
+                <button type="button" id="btn-test-cfg-url">Test Saved</button>
+              </div>
+              <div id="cfg-url-err" class="error-msg">
+                <span role="img" aria-label="Error">❌</span> Enter a valid http:// or https:// server URL.
+              </div>
+            </div>
+          </form>
+
+          <div class="field">
+            <label for="diag-test-url">Server URL to Test</label>
+            <div class="diag-action-row">
+              <input type="url" id="diag-test-url" autocorrect="off" autocapitalize="none" spellcheck="false"
+                     placeholder="https://your-app.azurewebsites.net">
+              <button type="button" id="btn-test-server" class="primary">Test Server Connection</button>
+              <button type="button" id="btn-apply-diag-url" hidden>Use in Settings</button>
+              <progress id="diag-spinner" class="loading-spinner" hidden aria-label="Testing server connection"></progress>
+            </div>
+          </div>
+
+          <ul class="diag-list" id="diag-steps" aria-live="polite">
+            <li class="diag-item">
+              <div class="diag-item-main">
+                <div class="diag-item-title">1. Wi-Fi &amp; Network</div>
+                <div class="diag-item-detail" id="step-wifi-detail">Waiting for status...</div>
+              </div>
+              <span class="diag-badge" id="step-wifi-badge">Ready</span>
+            </li>
+            <li class="diag-item">
+              <div class="diag-item-main">
+                <div class="diag-item-title">2. URL Validation</div>
+                <div class="diag-item-detail" id="step-url-detail">Enter a full http:// or https:// URL and press Test Server Connection.</div>
+              </div>
+              <span class="diag-badge" id="step-url-badge">Ready</span>
+            </li>
+            <li class="diag-item">
+              <div class="diag-item-main">
+                <div class="diag-item-title">3. DNS Lookup</div>
+                <div class="diag-item-detail" id="step-dns-detail">Not tested yet.</div>
+              </div>
+              <span class="diag-badge" id="step-dns-badge">Ready</span>
+            </li>
+            <li class="diag-item">
+              <div class="diag-item-main">
+                <div class="diag-item-title">4. HTTPS / TLS &amp; /api/v1/apps</div>
+                <div class="diag-item-detail" id="step-apps-detail">Not tested yet.</div>
+              </div>
+              <span class="diag-badge" id="step-apps-badge">Ready</span>
+            </li>
+            <li class="diag-item">
+              <div class="diag-item-main">
+                <div class="diag-item-title">5. Device Endpoint (/config)</div>
+                <div class="diag-item-detail" id="step-cfg-detail">Not tested yet.</div>
+              </div>
+              <span class="diag-badge" id="step-cfg-badge">Ready</span>
+            </li>
+          </ul>
+
+          <div id="diag-hint" class="status-banner" role="status" aria-live="polite">
+            Press &ldquo;Test Server Connection&rdquo; to diagnose DNS, TLS, and backend reachability directly from the ESP32.
+          </div>
         </div>
       </section>
     </main>
@@ -1146,11 +1782,48 @@
       else el.removeAttribute('aria-describedby');
     };
 
+    const liveBanner = document.getElementById('live-status');
+    const setBanner = (msg, tone = '') => {
+      if (!liveBanner) return;
+      liveBanner.textContent = msg;
+      if (tone) liveBanner.setAttribute('data-tone', tone);
+      else liveBanner.removeAttribute('data-tone');
+    };
+
+    window.addEventListener('error', (ev) => {
+      const msg = ev?.message || 'Unexpected script error';
+      setBanner(`Portal error: ${msg}`, 'err');
+    });
+    window.addEventListener('unhandledrejection', (ev) => {
+      const msg = ev?.reason?.message || String(ev?.reason || 'Request error');
+      if (liveBanner && /Loading device state/i.test(liveBanner.textContent)) {
+        setBanner(`Portal load error: ${msg}`, 'err');
+      }
+    });
+
+    async function fetchWithTimeout(url, opts = {}, timeoutMs = 8000) {
+      if (typeof AbortController === 'undefined') {
+        return fetch(url, opts);
+      }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...opts, signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    const supportsUserInvalid = typeof CSS !== 'undefined' &&
+      typeof CSS.supports === 'function' &&
+      CSS.supports('selector(:user-invalid)');
+
     const flagged = new WeakSet();
     const announced = new WeakSet();
     const syncAria = (el, shouldAnnounce = false) => {
       if (!el.matches?.('input, select')) return;
-      const invalid = el.matches(':user-invalid') || el.classList.contains('user-invalid-fallback');
+      const invalid = (supportsUserInvalid && el.matches(':user-invalid')) ||
+        el.classList.contains('user-invalid-fallback');
       if (invalid) {
         if (shouldAnnounce && !announced.has(el)) {
           const err = document.getElementById(el.dataset.error);
@@ -1173,7 +1846,7 @@
       }
     };
 
-    if (!CSS.supports('selector(:user-invalid)')) {
+    if (!supportsUserInvalid) {
       const dirty = new WeakMap();
       const upd = (el) => {
         const ok = el.validity.valid;
@@ -1210,12 +1883,104 @@
     }
     document.querySelectorAll('input, select').forEach((el) => syncAria(el));
 
-    const liveBanner = document.getElementById('live-status');
-    const setBanner = (msg, tone = '') => {
-      liveBanner.textContent = msg;
-      if (tone) liveBanner.setAttribute('data-tone', tone);
-      else liveBanner.removeAttribute('data-tone');
-    };
+    /* Reactive Client-Side Page Router (no full-page reload) */
+    const PAGES = ['preview', 'apps', 'device', 'wifi', 'server'];
+    const viewEls = Object.fromEntries(PAGES.map((p) => [p, document.getElementById(`view-${p}`)]));
+    const navLinks = Object.fromEntries(
+      Array.from(document.querySelectorAll('.nav-link[data-nav]')).map((a) => [a.dataset.nav, a])
+    );
+    let activePage = 'preview';
+    let userExplicitRoute = false;
+    let lastNonZeroVol = 18;
+    let volDebounce = null;
+    let brightDebounce = null;
+    let awaitingOtaResult = false;
+    let liveMirrorUserEnabled = true;
+    let pollTimer = null;
+    let latestStatus = null;
+    let initialStatusLoaded = false;
+    let cloudMetaRunning = false;
+    let diagRunning = false;
+
+    function pageFromHash() {
+      const h = window.location.hash.replace(/^#/, '').toLowerCase();
+      return PAGES.includes(h) ? h : null;
+    }
+
+    function applyPageDOM(page, moveFocus) {
+      activePage = page;
+      for (const p of PAGES) {
+        const view = viewEls[p];
+        const link = navLinks[p];
+        const isCurrent = (p === page);
+        view.classList.toggle('inactive', !isCurrent);
+        view.setAttribute('aria-hidden', isCurrent ? 'false' : 'true');
+        if (isCurrent) {
+          view.removeAttribute('inert');
+        } else {
+          view.setAttribute('inert', '');
+        }
+        if (link) {
+          if (isCurrent) {
+            link.setAttribute('aria-current', 'page');
+            if (typeof link.scrollIntoView === 'function') {
+              link.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }
+          } else {
+            link.removeAttribute('aria-current');
+          }
+        }
+      }
+      syncBackgroundPolling();
+      if (page === 'preview') {
+        fetchPreviewFrame();
+      }
+      if (moveFocus) {
+        const heading = viewEls[page].querySelector('h2');
+        heading?.focus({ preventScroll: true });
+      }
+    }
+
+    function navigateTo(nextPage, { pushHash = true, moveFocus = true } = {}) {
+      const page = PAGES.includes(nextPage) ? nextPage : 'preview';
+      if (page === activePage) {
+        if (pushHash && window.location.hash !== `#${page}`) {
+          history.replaceState(null, '', `#${page}`);
+        }
+        return;
+      }
+      if (pushHash) {
+        history.pushState(null, '', `#${page}`);
+      }
+      if (!document.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        applyPageDOM(page, moveFocus);
+        return;
+      }
+      const tr = document.startViewTransition(() => {
+        applyPageDOM(page, false);
+      });
+      if (moveFocus) {
+        tr.finished.finally(() => {
+          viewEls[page].querySelector('h2')?.focus({ preventScroll: true });
+        });
+      }
+    }
+
+    document.querySelectorAll('.nav-link[data-nav]').forEach((link) => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        userExplicitRoute = true;
+        navigateTo(link.dataset.nav, { pushHash: true, moveFocus: true });
+      });
+    });
+
+    window.addEventListener('hashchange', () => {
+      const p = pageFromHash();
+      if (p) {
+        userExplicitRoute = true;
+        navigateTo(p, { pushHash: false, moveFocus: true });
+      }
+    });
 
     const syncRangeStyle = (slider, labelId) => {
       const min = Number(slider.min || 0);
@@ -1232,13 +1997,6 @@
     const autoBrightChk = document.getElementById('cfg-auto-bright');
     const muteBtn = document.getElementById('btn-vol-mute');
     const quickAppSel = document.getElementById('quick-app');
-    let lastNonZeroVol = 18;
-    let volDebounce = null;
-    let brightDebounce = null;
-    let awaitingOtaResult = false;
-    let liveMirrorUserEnabled = true;
-    let liveContainerVisible = true;
-    let pollTimer = null;
 
     const syncMuteButtonLabel = () => {
       const v = Number(volSlider.value);
@@ -1306,7 +2064,11 @@
       const sel = document.getElementById(presetId);
       const inp = document.getElementById(inputId);
       sel.addEventListener('change', () => {
-        if (sel.value) {
+        if (sel.value === '__clear__') {
+          inp.value = '';
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          sel.value = '';
+        } else if (sel.value) {
           inp.value = sel.value;
           inp.dispatchEvent(new Event('input', { bubbles: true }));
         }
@@ -1315,16 +2077,16 @@
     bindPresetToInput('setup-team-preset', 'setup-team');
     bindPresetToInput('cfg-team-preset', 'cfg-teams');
 
-    const scanBtn = document.getElementById('btn-scan');
     const scanSel = document.getElementById('scan-select');
-    const setupSsid = document.getElementById('setup-ssid');
+    const ssidInp = document.getElementById('setup-ssid');
     scanSel.addEventListener('change', () => {
       if (scanSel.value) {
-        setupSsid.value = scanSel.value;
-        setupSsid.dispatchEvent(new Event('input', { bubbles: true }));
+        ssidInp.value = scanSel.value;
+        ssidInp.dispatchEvent(new Event('input', { bubbles: true }));
       }
     });
 
+    const scanBtn = document.getElementById('btn-scan');
     async function scanNetworks() {
       scanBtn.disabled = true;
       scanBtn.textContent = 'Scanning...';
@@ -1332,11 +2094,7 @@
         const res = await fetch('/api/local/scan');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const list = await res.json();
-        scanSel.innerHTML = '';
-        const ph = document.createElement('option');
-        ph.value = '';
-        ph.textContent = list.length ? `-- ${list.length} networks found --` : '-- No networks found --';
-        scanSel.appendChild(ph);
+        scanSel.innerHTML = '<option value="">-- Choose a scanned network --</option>';
         for (const net of list) {
           const opt = document.createElement('option');
           opt.value = net.ssid;
@@ -1352,25 +2110,567 @@
     }
     scanBtn.addEventListener('click', scanNetworks);
 
+    /* Multi-App Configuration State & Renderer */
     let loadedAppSchemas = [];
     let currentServerAppSettings = {};
+    let currentServerAppSchedules = {};
+    let currentEnabledApps = null;
+    let selectedConfigAppId = '';
+    const appPickerSel = document.getElementById('cfg-selected-app');
+    const selectionModeSel = document.getElementById('cfg-selection-mode');
+    const rotationWrap = document.getElementById('rotation-controls-wrap');
+    const rotationSecInp = document.getElementById('cfg-rotation-seconds');
+    const rotateClockChk = document.getElementById('cfg-rotate-clock');
 
-    function renderCloudAppSchemas() {
-      const host = document.getElementById('cloud-apps-body');
-      if (!loadedAppSchemas.length) return;
-      host.innerHTML = '';
+    const CATEGORY_LABELS = {
+      sports_cfb: 'CFB',
+      sports_cbb: 'CBB',
+      events: 'Events',
+      utility: 'Utility',
+    };
+    const DAYS_OF_WEEK = [
+      ['mon', 'Mon'],
+      ['tue', 'Tue'],
+      ['wed', 'Wed'],
+      ['thu', 'Thu'],
+      ['fri', 'Fri'],
+      ['sat', 'Sat'],
+      ['sun', 'Sun'],
+    ];
+
+    function syncRotationUI() {
+      const isRotate = selectionModeSel.value === 'rotate';
+      rotationWrap.hidden = !isRotate;
+      rotationSecInp.disabled = !isRotate;
+      rotateClockChk.disabled = !isRotate;
+    }
+    selectionModeSel.addEventListener('change', syncRotationUI);
+    syncRotationUI();
+
+    function categoryLabel(cat) {
+      if (!cat) return 'Other';
+      return CATEGORY_LABELS[cat] || cat.replace(/_/g, ' ');
+    }
+
+    function hasCustomTimeSchedule(sched) {
+      if (!sched) return false;
+      return (
+        sched.enabled === false ||
+        (Array.isArray(sched.days_of_week) && sched.days_of_week.length > 0) ||
+        Boolean(sched.start_time) ||
+        Boolean(sched.end_time) ||
+        Boolean(sched.date_start) ||
+        Boolean(sched.date_end)
+      );
+    }
+
+    function effectivePriorityFor(app) {
+      const sched = currentServerAppSchedules[app.app_id] || {};
+      return (sched.priority !== null && sched.priority !== undefined && sched.priority !== '')
+        ? sched.priority
+        : (app.priority ?? 0);
+    }
+
+    function normalizeBirthdayDate(raw) {
+      const s = String(raw || '').trim();
+      const m = s.match(/^(?:(\d{4})[-/])?(\d{1,2})[-/](\d{1,2})$/);
+      if (!m) return { ok: false, error: 'Use MM-DD format (e.g. 04-12).' };
+      const month = Number(m[2]);
+      const day = Number(m[3]);
+      if (month < 1 || month > 12) return { ok: false, error: 'Month must be 01-12.' };
+      const maxDay = new Date(2024, month, 0).getDate();
+      if (day < 1 || day > maxDay) return { ok: false, error: `Day must be 01-${String(maxDay).padStart(2, '0')} for month ${month}.` };
+      return {
+        ok: true,
+        date: `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+        inferredYear: m[1] ? Number(m[1]) : null,
+      };
+    }
+
+    function normalizeBirthdayEntries(raw) {
+      if (!Array.isArray(raw)) return [];
+      const out = [];
+      for (const item of raw) {
+        if (!item || typeof item !== 'object') continue;
+        const name = String(item.name || '').trim();
+        if (!name) continue;
+        let dateStr = '';
+        if (item.date) {
+          const parsed = normalizeBirthdayDate(item.date);
+          if (parsed.ok) dateStr = parsed.date;
+        } else if (item.month && item.day) {
+          const parsed = normalizeBirthdayDate(`${item.month}-${item.day}`);
+          if (parsed.ok) dateStr = parsed.date;
+        }
+        if (!dateStr) continue;
+        let birthYear = null;
+        if (item.birth_year !== null && item.birth_year !== undefined && item.birth_year !== '') {
+          const yr = Number(item.birth_year);
+          if (Number.isInteger(yr) && yr >= 1900 && yr <= 2100) birthYear = yr;
+        }
+        const themeRaw = (typeof item.theme === 'string') ? item.theme.trim() : '';
+        out.push({
+          date: dateStr,
+          name,
+          birth_year: birthYear,
+          theme: themeRaw || null,
+        });
+      }
+      return out;
+    }
+
+    const ALARM_WEEKDAYS = [
+      ['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'],
+      ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun'],
+    ];
+
+    function normalizeAlarmTimeInput(raw) {
+      const s = String(raw || '').trim();
+      const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+      if (!m) return '07:00';
+      const h = Number(m[1]);
+      const min = Number(m[2]);
+      if (h < 0 || h > 23 || min < 0 || min > 59) return '07:00';
+      return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+    }
+
+    function normalizeAlarmEntries(raw, legacyCfg = null) {
+      if (Array.isArray(raw)) {
+        const out = [];
+        for (let i = 0; i < raw.length; i++) {
+          const item = raw[i];
+          if (!item || typeof item !== 'object') continue;
+          const days = Array.isArray(item.days)
+            ? item.days.map((d) => String(d).trim().toLowerCase()).filter((d) => ALARM_WEEKDAYS.some(([k]) => k === d))
+            : [];
+          const repeat = (item.repeat === false || days.length === 0) ? false : true;
+          out.push({
+            id: String(item.id || `alarm_${i + 1}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || `alarm_${i + 1}`,
+            enabled: item.enabled !== false,
+            time: normalizeAlarmTimeInput(item.time),
+            repeat,
+            days: repeat ? days : [],
+            label: String(item.label || 'WAKE UP!').trim().slice(0, 24) || 'WAKE UP!',
+            sound: typeof item.sound === 'string' ? item.sound.trim() : '',
+            theme: typeof item.theme === 'string' ? item.theme.trim() : '',
+          });
+        }
+        return out;
+      }
+      if (legacyCfg && String(legacyCfg.alarm_time || '').trim()) {
+        const days = Array.isArray(legacyCfg.alarm_days) ? legacyCfg.alarm_days.map((d) => String(d).toLowerCase()) : [];
+        const repeat = (legacyCfg.alarm_repeat === false || days.length === 0) ? false : true;
+        return [{
+          id: 'alarm_1',
+          enabled: true,
+          time: normalizeAlarmTimeInput(legacyCfg.alarm_time),
+          repeat,
+          days: repeat ? days : [],
+          label: String(legacyCfg.alarm_label || 'WAKE UP!').trim().slice(0, 24) || 'WAKE UP!',
+          sound: String(legacyCfg.alarm_sound || ''),
+          theme: String(legacyCfg.alarm_theme || ''),
+        }];
+      }
+      return [];
+    }
+
+    function formatAlarmClock(hhmm, use24h = false) {
+      const norm = normalizeAlarmTimeInput(hhmm);
+      if (use24h) return norm;
+      const [hStr, mStr] = norm.split(':');
+      let h = Number(hStr);
+      const ap = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      return `${h}:${mStr} ${ap}`;
+    }
+
+    function formatAlarmDays(days, repeat = true) {
+      const list = Array.isArray(days) ? days.map((d) => String(d).toLowerCase()) : [];
+      if (repeat === false || list.length === 0) return 'Once (auto-deletes)';
+      const set = new Set(list);
+      if (set.size === 7) return 'Every day';
+      if (set.size === 5 && ['mon', 'tue', 'wed', 'thu', 'fri'].every((d) => set.has(d))) return 'Mon–Fri';
+      if (set.size === 2 && set.has('sat') && set.has('sun')) return 'Weekends';
+      return ALARM_WEEKDAYS.filter(([k]) => set.has(k)).map(([, lbl]) => lbl).join(', ');
+    }
+
+    function computeNextAlarmOccurrence(entries) {
+      const active = entries.filter((e) => e.enabled !== false);
+      if (!active.length) return null;
+      const jsToCode = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+      const now = new Date();
+      let best = null;
+      for (const entry of active) {
+        const [hh, mm] = normalizeAlarmTimeInput(entry.time).split(':').map(Number);
+        const isRepeating = entry.repeat !== false && Array.isArray(entry.days) && entry.days.length > 0;
+        const daySet = isRepeating ? new Set(entry.days) : null;
+        for (let offset = 0; offset < 8; offset++) {
+          const cand = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset, hh, mm, 0, 0);
+          if (cand <= now) continue;
+          if (daySet && !daySet.has(jsToCode[cand.getDay()])) continue;
+          if (!best || cand < best.date) {
+            best = { date: cand, entry };
+          }
+          break;
+        }
+      }
+      return best;
+    }
+
+    function renderHomeAlarmsSummary() {
+      const sumEl = document.getElementById('home-alarms-summary');
+      const listEl = document.getElementById('home-alarms-list');
+      const pillEl = document.getElementById('pill-alarm');
+      const ringingBanner = document.getElementById('alarm-ringing-banner');
+      if (!sumEl || !listEl) return;
+
+      const isRinging = Boolean(latestStatus?.alarm_ringing);
+      if (ringingBanner) ringingBanner.hidden = !isRinging;
+
+      const alarmSchema = loadedAppSchemas.find((a) => a.app_id === 'alarm');
+      const alarmCfg = currentServerAppSettings.alarm || {};
+      const alarmAppEnabled = currentEnabledApps ? currentEnabledApps.has('alarm') : false;
+      const use24h = alarmCfg.time_format === '24h';
+      const defaultField = alarmSchema?.settings_schema?.find((f) => f.key === 'alarms');
+      const entries = ('alarms' in alarmCfg || alarmCfg.alarm_time)
+        ? normalizeAlarmEntries(alarmCfg.alarms, alarmCfg)
+        : (alarmAppEnabled && defaultField ? normalizeAlarmEntries(defaultField.default, alarmCfg) : []);
+
+      const activeEntries = entries.filter((e) => e.enabled !== false);
+      const nextInfo = alarmAppEnabled ? computeNextAlarmOccurrence(entries) : null;
+
+      if (pillEl) {
+        if (isRinging) {
+          pillEl.textContent = 'ALARM RINGING!';
+          pillEl.hidden = false;
+        } else if (nextInfo) {
+          pillEl.textContent = `Alarm: ${formatAlarmClock(nextInfo.entry.time, use24h)}`;
+          pillEl.hidden = false;
+        } else {
+          pillEl.hidden = true;
+        }
+      }
+
+      if (!loadedAppSchemas.length && !('alarm' in currentServerAppSettings)) {
+        sumEl.textContent = 'Connect to the Clean Slate server to view scheduled alarms.';
+        listEl.hidden = true;
+        return;
+      }
+
+      listEl.innerHTML = '';
+      if (!entries.length) {
+        sumEl.textContent = alarmAppEnabled
+          ? 'Alarm Clock is enabled, but no alarms are set yet. Click "Manage Alarms" to add one.'
+          : 'No alarms set. Click "Manage Alarms" to enable Alarm Clock and add an alarm.';
+        listEl.hidden = true;
+        return;
+      }
+
+      if (!alarmAppEnabled) {
+        sumEl.textContent = `${entries.length} alarm(s) saved, but Alarm Clock app is currently disabled.`;
+      } else if (nextInfo) {
+        const minsLeft = Math.max(1, Math.round((nextInfo.date.getTime() - Date.now()) / 60000));
+        const hrs = Math.floor(minsLeft / 60);
+        const remMins = minsLeft % 60;
+        const rel = hrs > 0 ? `in ${hrs}h ${remMins}m` : `in ${remMins}m`;
+        sumEl.textContent = `${activeEntries.length} active alarm${activeEntries.length === 1 ? '' : 's'} — next: ${formatAlarmClock(nextInfo.entry.time, use24h)} (${nextInfo.entry.label}) ${rel}.`;
+      } else {
+        sumEl.textContent = `${entries.length} alarm(s) saved (all currently paused).`;
+      }
+
+      for (const item of entries) {
+        const li = document.createElement('li');
+        const isActive = alarmAppEnabled && item.enabled !== false;
+        li.className = `alarm-summary-item${isActive ? '' : ' is-disabled'}`;
+
+        const left = document.createElement('div');
+        const timeSpan = document.createElement('div');
+        timeSpan.className = 'alarm-summary-time';
+        timeSpan.textContent = formatAlarmClock(item.time, use24h);
+        const meta = document.createElement('div');
+        meta.className = 'alarm-summary-meta';
+        meta.textContent = `${item.label} • ${formatAlarmDays(item.days, item.repeat)}`;
+        left.append(timeSpan, meta);
+
+        const badge = document.createElement('span');
+        badge.className = 'diag-badge';
+        badge.setAttribute('data-state', isActive ? 'pass' : 'warn');
+        badge.textContent = isActive ? 'Active' : (!alarmAppEnabled ? 'App Off' : 'Paused');
+
+        li.append(left, badge);
+        listEl.appendChild(li);
+      }
+      listEl.hidden = false;
+    }
+
+    function snapshotCurrentAppEditor() {
+      const card = document.querySelector('#cloud-apps-body [data-editor-app]');
+      if (!card) return;
+      const appId = card.dataset.editorApp;
+      if (!appId) return;
+
+      const nextCfg = {
+        ...(currentServerAppSettings[appId] || {}),
+        enabled: currentEnabledApps ? currentEnabledApps.has(appId) : false,
+      };
+      card.querySelectorAll('[data-app-id]').forEach((el) => {
+        const key = el.dataset.fieldKey;
+        const typ = el.dataset.fieldType;
+        if (typ === 'toggle') {
+          nextCfg[key] = el.checked;
+        } else if (typ === 'number') {
+          nextCfg[key] = Number(el.value);
+        } else if (typ === 'multi_select') {
+          nextCfg[key] = Array.from(el.querySelectorAll('input[data-multi-val]:checked')).map((c) => c.value);
+        } else if (typ === 'birthday_list') {
+          try {
+            nextCfg[key] = normalizeBirthdayEntries(JSON.parse(el.dataset.entriesJson || '[]'));
+          } catch (_) {
+            nextCfg[key] = [];
+          }
+        } else if (typ === 'alarm_list') {
+          try {
+            nextCfg[key] = normalizeAlarmEntries(JSON.parse(el.dataset.entriesJson || '[]'));
+          } catch (_) {
+            nextCfg[key] = [];
+          }
+          delete nextCfg.alarm_time;
+          delete nextCfg.alarm_days;
+          delete nextCfg.alarm_label;
+          delete nextCfg.alarm_repeat;
+        } else {
+          nextCfg[key] = el.value;
+        }
+      });
+      currentServerAppSettings[appId] = nextCfg;
+
+      const enEl = card.querySelector('[data-sched-key="enabled"]');
+      const priRaw = card.querySelector('[data-sched-key="priority"]')?.value.trim() ?? '';
+      const pri = priRaw === '' ? null : Number(priRaw);
+      const days = Array.from(card.querySelectorAll('input[data-sched-day]:checked')).map((c) => c.value);
+      const st = card.querySelector('[data-sched-key="start_time"]')?.value.trim() || null;
+      const et = card.querySelector('[data-sched-key="end_time"]')?.value.trim() || null;
+      const ds = card.querySelector('[data-sched-key="date_start"]')?.value.trim() || null;
+      const de = card.querySelector('[data-sched-key="date_end"]')?.value.trim() || null;
+      currentServerAppSchedules[appId] = {
+        enabled: enEl ? Boolean(enEl.checked) : true,
+        priority: Number.isNaN(pri) ? null : pri,
+        days_of_week: days,
+        start_time: st,
+        end_time: et,
+        date_start: ds,
+        date_end: de,
+      };
+    }
+
+    function updateEnabledSummaryAndNav() {
+      const sumEl = document.getElementById('apps-enabled-summary');
+      const countBadge = document.getElementById('nav-apps-count');
+      if (!loadedAppSchemas.length) {
+        if (sumEl) sumEl.textContent = 'No server apps loaded yet.';
+        countBadge.hidden = true;
+        return;
+      }
+      const enabledApps = currentEnabledApps
+        ? loadedAppSchemas.filter((a) => currentEnabledApps.has(a.app_id))
+        : [];
+      const enabledCount = enabledApps.length;
+      if (sumEl) {
+        if (enabledCount === 0) {
+          sumEl.textContent = `0 of ${loadedAppSchemas.length} enabled (device falls back to Clock).`;
+        } else {
+          const names = enabledApps.map((a) => a.name || a.app_id);
+          const preview = names.length <= 3
+            ? names.join(', ')
+            : `${names.slice(0, 3).join(', ')} +${names.length - 3} more`;
+          sumEl.textContent = `${enabledCount} of ${loadedAppSchemas.length} enabled: ${preview}`;
+        }
+      }
+      countBadge.textContent = String(enabledCount);
+      countBadge.hidden = false;
+    }
+
+    function populateSelectedAppDropdown() {
+      appPickerSel.innerHTML = '';
+      if (!loadedAppSchemas.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No server apps loaded';
+        appPickerSel.appendChild(opt);
+        selectedConfigAppId = '';
+        return;
+      }
+
+      if (!loadedAppSchemas.some((a) => a.app_id === selectedConfigAppId)) {
+        const firstEnabled = currentEnabledApps
+          ? loadedAppSchemas.find((a) => currentEnabledApps.has(a.app_id))
+          : null;
+        selectedConfigAppId = (firstEnabled || loadedAppSchemas[0]).app_id;
+      }
+
+      const activeAppId = latestStatus?.active_app || '';
+      const byCat = new Map();
       for (const app of loadedAppSchemas) {
-        if (!app.settings_schema || !app.settings_schema.length) continue;
-        const heading = document.createElement('h3');
-        heading.textContent = app.name;
-        host.appendChild(heading);
+        const cat = app.category || '__other__';
+        if (!byCat.has(cat)) byCat.set(cat, []);
+        byCat.get(cat).push(app);
+      }
+
+      const makeOption = (app) => {
+        const opt = document.createElement('option');
+        opt.value = app.app_id;
+        const isEn = currentEnabledApps ? currentEnabledApps.has(app.app_id) : false;
+        const effPri = effectivePriorityFor(app);
+        const showing = (app.app_id === activeAppId) ? ' [Showing]' : '';
+        opt.textContent = `${isEn ? '✓ ' : ''}${app.name || app.app_id} · P${effPri}${showing}`;
+        return opt;
+      };
+
+      if (byCat.size > 1) {
+        for (const [cat, apps] of byCat.entries()) {
+          const grp = document.createElement('optgroup');
+          grp.label = cat === '__other__' ? 'Other' : categoryLabel(cat);
+          for (const app of apps) grp.appendChild(makeOption(app));
+          appPickerSel.appendChild(grp);
+        }
+      } else {
+        for (const app of loadedAppSchemas) appPickerSel.appendChild(makeOption(app));
+      }
+
+      appPickerSel.value = selectedConfigAppId;
+    }
+
+    function renderSelectedAppEditor() {
+      const host = document.getElementById('cloud-apps-body');
+      host.innerHTML = '';
+      const app = loadedAppSchemas.find((a) => a.app_id === selectedConfigAppId);
+      if (!app) {
+        const p = document.createElement('p');
+        p.className = 'hint';
+        p.textContent = 'Connect to Wi-Fi and reach the Clean Slate server to load app schemas.';
+        host.appendChild(p);
+        return;
+      }
+
+      const activeAppId = latestStatus?.active_app || '';
+      const isEnabled = currentEnabledApps ? currentEnabledApps.has(app.app_id) : false;
+      const schemaFields = Array.isArray(app.settings_schema) ? app.settings_schema : [];
+      const sched = currentServerAppSchedules[app.app_id] || {};
+
+      const card = document.createElement('section');
+      card.className = 'app-card';
+      card.dataset.editorApp = app.app_id;
+
+      const head = document.createElement('div');
+      head.className = 'app-card-head';
+
+      const titleWrap = document.createElement('div');
+      titleWrap.className = 'app-card-title';
+
+      const enableLbl = document.createElement('label');
+      enableLbl.className = 'app-enable-wrap';
+      const enableCb = document.createElement('input');
+      enableCb.type = 'checkbox';
+      enableCb.checked = isEnabled;
+      enableCb.dataset.appEnable = app.app_id;
+      enableCb.setAttribute('aria-label', `Enable ${app.name || app.app_id}`);
+      enableLbl.appendChild(enableCb);
+
+      const title = document.createElement('h3');
+      title.textContent = `Enable ${app.name || app.app_id}`;
+      enableLbl.appendChild(title);
+
+      const idSpan = document.createElement('code');
+      idSpan.className = 'app-id-code';
+      idSpan.textContent = app.app_id;
+
+      titleWrap.append(enableLbl, idSpan);
+
+      if (app.category) {
+        const catBadge = document.createElement('span');
+        catBadge.className = 'diag-badge';
+        catBadge.textContent = categoryLabel(app.category);
+        titleWrap.appendChild(catBadge);
+      }
+
+      if (app.app_id === activeAppId || activeAppId.startsWith(`${app.app_id}:`)) {
+        const actBadge = document.createElement('span');
+        actBadge.className = 'diag-badge';
+        actBadge.setAttribute('data-state', 'pass');
+        actBadge.textContent = 'Showing Now';
+        titleWrap.appendChild(actBadge);
+      }
+
+      const appScreens = Array.isArray(app.screens) ? app.screens : [];
+      const showCtrl = document.createElement('div');
+      showCtrl.className = 'btn-bar';
+      showCtrl.style.margin = '0';
+      if (appScreens.length > 0) {
+        for (const scr of appScreens) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'small';
+          btn.dataset.previewApp = app.app_id;
+          btn.dataset.previewScreen = scr.screen_id;
+          btn.textContent = `Show: ${scr.name || scr.screen_id}`;
+          btn.addEventListener('click', () => triggerAction('set_app', {
+            app_id: app.app_id,
+            screen_id: scr.screen_id,
+          }));
+          showCtrl.appendChild(btn);
+        }
+      } else {
+        const showBtn = document.createElement('button');
+        showBtn.type = 'button';
+        showBtn.className = 'small';
+        showBtn.dataset.previewApp = app.app_id;
+        showBtn.textContent = 'Show on Display';
+        showBtn.addEventListener('click', () => triggerAction('set_app', { app_id: app.app_id }));
+        showCtrl.appendChild(showBtn);
+      }
+
+      enableCb.addEventListener('change', () => {
+        if (!currentEnabledApps) currentEnabledApps = new Set();
+        if (enableCb.checked) currentEnabledApps.add(app.app_id);
+        else currentEnabledApps.delete(app.app_id);
+        snapshotCurrentAppEditor();
+        populateSelectedAppDropdown();
+        updateEnabledSummaryAndNav();
+        populateAppSelect(
+          document.getElementById('cfg-pinned-app'),
+          getEffectivePinApps(),
+          document.getElementById('cfg-pinned-app').value
+        );
+      });
+
+      head.append(titleWrap, showCtrl);
+      card.appendChild(head);
+
+      if (app.description) {
+        const desc = document.createElement('p');
+        desc.className = 'hint';
+        desc.style.margin = '0';
+        desc.textContent = app.description;
+        card.appendChild(desc);
+      }
+
+      /* 1. App Configuration Box */
+      const visibleSchemaFields = schemaFields.filter((f) => f.key !== 'enabled');
+      if (visibleSchemaFields.length > 0) {
+        const cfgBox = document.createElement('div');
+        cfgBox.className = 'app-subbox';
+        const cfgTitle = document.createElement('h4');
+        cfgTitle.className = 'app-subbox-title';
+        cfgTitle.textContent = 'Configuration';
+        cfgBox.appendChild(cfgTitle);
 
         const savedAppCfg = currentServerAppSettings[app.app_id] || {};
-        for (const field of app.settings_schema) {
+        for (const field of visibleSchemaFields) {
           const val = (field.key in savedAppCfg) ? savedAppCfg[field.key] : field.default;
           const wrap = document.createElement('div');
           wrap.className = 'field';
           const cid = `dyn_${app.app_id}_${field.key}`;
+          const hintId = field.description ? `${cid}_hint` : '';
 
           if (field.type === 'toggle') {
             const row = document.createElement('div');
@@ -1382,6 +2682,7 @@
             cb.dataset.appId = app.app_id;
             cb.dataset.fieldKey = field.key;
             cb.dataset.fieldType = 'toggle';
+            if (hintId) cb.setAttribute('aria-describedby', hintId);
             const lbl = document.createElement('label');
             lbl.htmlFor = cid;
             lbl.textContent = field.label;
@@ -1396,6 +2697,7 @@
             sel.dataset.appId = app.app_id;
             sel.dataset.fieldKey = field.key;
             sel.dataset.fieldType = 'select';
+            if (hintId) sel.setAttribute('aria-describedby', hintId);
             for (const o of (field.options || [])) {
               const opt = document.createElement('option');
               opt.value = o.value;
@@ -1404,68 +2706,1085 @@
             }
             sel.value = String(val ?? field.default ?? '');
             wrap.append(lbl, sel);
+          } else if (field.type === 'multi_select') {
+            const titleEl = document.createElement('span');
+            titleEl.style.fontWeight = '600';
+            titleEl.textContent = field.label;
+
+            const container = document.createElement('div');
+            container.id = cid;
+            container.dataset.appId = app.app_id;
+            container.dataset.fieldKey = field.key;
+            container.dataset.fieldType = 'multi_select';
+            if (hintId) container.setAttribute('aria-describedby', hintId);
+
+            const helperBar = document.createElement('div');
+            helperBar.className = 'btn-bar';
+            helperBar.style.margin = '0.25rem 0 0';
+
+            const selectedSet = new Set(Array.isArray(val) ? val : []);
+            const majorList = Array.isArray(field.default) ? field.default : [];
+            const grid = document.createElement('div');
+            grid.className = 'multi-select-grid';
+
+            const boxes = [];
+            for (const o of (field.options || [])) {
+              const row = document.createElement('div');
+              row.className = 'check-row';
+              const cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.id = `${cid}_${o.value}`;
+              cb.value = o.value;
+              cb.checked = selectedSet.has(o.value);
+              cb.dataset.multiVal = o.value;
+              cb.addEventListener('change', () => snapshotCurrentAppEditor());
+              const optLbl = document.createElement('label');
+              optLbl.htmlFor = cb.id;
+              optLbl.textContent = o.label;
+              row.append(cb, optLbl);
+              grid.appendChild(row);
+              boxes.push(cb);
+            }
+
+            if (majorList.length > 0) {
+              const majorSet = new Set(majorList);
+              const majorBtn = document.createElement('button');
+              majorBtn.type = 'button';
+              majorBtn.className = 'small';
+              majorBtn.textContent = 'Major';
+              majorBtn.addEventListener('click', () => {
+                boxes.forEach((cb) => { cb.checked = majorSet.has(cb.value); });
+                snapshotCurrentAppEditor();
+              });
+              helperBar.appendChild(majorBtn);
+            }
+
+            const allBtn = document.createElement('button');
+            allBtn.type = 'button';
+            allBtn.className = 'small';
+            allBtn.textContent = 'All';
+            allBtn.addEventListener('click', () => {
+              boxes.forEach((cb) => { cb.checked = true; });
+              snapshotCurrentAppEditor();
+            });
+
+            const noneBtn = document.createElement('button');
+            noneBtn.type = 'button';
+            noneBtn.className = 'small';
+            noneBtn.textContent = 'Clear';
+            noneBtn.addEventListener('click', () => {
+              boxes.forEach((cb) => { cb.checked = false; });
+              snapshotCurrentAppEditor();
+            });
+
+            helperBar.append(allBtn, noneBtn);
+            container.append(helperBar, grid);
+            wrap.append(titleEl, container);
+          } else if (field.type === 'birthday_list') {
+            const titleEl = document.createElement('span');
+            titleEl.style.fontWeight = '600';
+            titleEl.textContent = field.label;
+
+            const container = document.createElement('div');
+            container.id = cid;
+            container.dataset.appId = app.app_id;
+            container.dataset.fieldKey = field.key;
+            container.dataset.fieldType = 'birthday_list';
+            if (hintId) container.setAttribute('aria-describedby', hintId);
+
+            let entries = normalizeBirthdayEntries(val);
+            container.dataset.entriesJson = JSON.stringify(entries);
+
+            const addRow = document.createElement('div');
+            addRow.className = 'bday-add-row';
+
+            const dateWrap = document.createElement('div');
+            dateWrap.className = 'field';
+            dateWrap.style.margin = '0';
+            const dLbl = document.createElement('label');
+            dLbl.htmlFor = `${cid}_add_date`;
+            dLbl.textContent = 'Month/Day';
+            const dInp = document.createElement('input');
+            dInp.type = 'text';
+            dInp.id = `${cid}_add_date`;
+            dInp.maxLength = 5;
+            dInp.placeholder = 'MM-DD';
+            dInp.inputMode = 'numeric';
+            dateWrap.append(dLbl, dInp);
+
+            const nameWrap = document.createElement('div');
+            nameWrap.className = 'field';
+            nameWrap.style.margin = '0';
+            const nLbl = document.createElement('label');
+            nLbl.htmlFor = `${cid}_add_name`;
+            nLbl.textContent = 'Name';
+            const nInp = document.createElement('input');
+            nInp.type = 'text';
+            nInp.id = `${cid}_add_name`;
+            nInp.maxLength = 32;
+            nInp.placeholder = 'e.g. Mom';
+            nameWrap.append(nLbl, nInp);
+
+            const yearWrap = document.createElement('div');
+            yearWrap.className = 'field';
+            yearWrap.style.margin = '0';
+            const yLbl = document.createElement('label');
+            yLbl.htmlFor = `${cid}_add_year`;
+            yLbl.textContent = 'Birth Year';
+            const yInp = document.createElement('input');
+            yInp.type = 'number';
+            yInp.id = `${cid}_add_year`;
+            yInp.min = '1900';
+            yInp.max = '2100';
+            yInp.step = '1';
+            yInp.placeholder = 'Optional';
+            yInp.inputMode = 'numeric';
+            yearWrap.append(yLbl, yInp);
+
+            const themeOpts = Array.isArray(field.options) ? field.options : [];
+            const buildThemeSelect = (selId, selectedVal) => {
+              const sel = document.createElement('select');
+              if (selId) sel.id = selId;
+              const defOpt = document.createElement('option');
+              defOpt.value = '';
+              defOpt.textContent = 'Use Default';
+              sel.appendChild(defOpt);
+              for (const o of themeOpts) {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.label;
+                sel.appendChild(opt);
+              }
+              const valStr = (typeof selectedVal === 'string') ? selectedVal.trim() : '';
+              if (valStr && !themeOpts.some((o) => o.value === valStr)) {
+                const customOpt = document.createElement('option');
+                customOpt.value = valStr;
+                customOpt.textContent = valStr;
+                sel.appendChild(customOpt);
+              }
+              sel.value = valStr;
+              return sel;
+            };
+
+            const themeWrap = document.createElement('div');
+            themeWrap.className = 'field';
+            themeWrap.style.margin = '0';
+            const tLbl = document.createElement('label');
+            tLbl.htmlFor = `${cid}_add_theme`;
+            tLbl.textContent = 'Theme';
+            const tSel = buildThemeSelect(`${cid}_add_theme`, '');
+            themeWrap.append(tLbl, tSel);
+
+            const addBtn = document.createElement('button');
+            addBtn.type = 'button';
+            addBtn.className = 'small primary';
+            addBtn.textContent = '+ Add';
+            addBtn.id = `${cid}_add_btn`;
+
+            addRow.append(dateWrap, nameWrap, yearWrap, themeWrap, addBtn);
+
+            const errMsg = document.createElement('div');
+            errMsg.className = 'error-msg';
+            errMsg.setAttribute('role', 'alert');
+            errMsg.hidden = true;
+
+            const emptyNote = document.createElement('p');
+            emptyNote.className = 'hint';
+            emptyNote.textContent = 'No birthdays added yet.';
+
+            const tblWrap = document.createElement('div');
+            tblWrap.className = 'table-wrapper';
+            tblWrap.tabIndex = 0;
+            tblWrap.setAttribute('role', 'region');
+            tblWrap.setAttribute('aria-label', `${field.label} entries`);
+
+            const tbl = document.createElement('table');
+            tbl.className = 'bday-table';
+            const thead = document.createElement('thead');
+            const headTr = document.createElement('tr');
+            for (const colName of ['Select', 'Name', 'Date', 'Birth Year', 'Theme']) {
+              const th = document.createElement('th');
+              th.scope = 'col';
+              th.textContent = colName;
+              headTr.appendChild(th);
+            }
+            thead.appendChild(headTr);
+            const tbody = document.createElement('tbody');
+            tbl.append(thead, tbody);
+            tblWrap.appendChild(tbl);
+
+            const rmBar = document.createElement('div');
+            rmBar.className = 'btn-bar';
+            rmBar.style.marginBlock = '0.35rem 0';
+            const rmBtn = document.createElement('button');
+            rmBtn.type = 'button';
+            rmBtn.className = 'small danger';
+            rmBtn.id = `${cid}_remove_btn`;
+            rmBtn.textContent = 'Remove Selected';
+            rmBar.appendChild(rmBtn);
+
+            const syncRemoveBtn = () => {
+              const anyChecked = tbody.querySelectorAll('input[data-bday-idx]:checked').length > 0;
+              rmBtn.disabled = !anyChecked;
+            };
+
+            const renderBirthdayRows = () => {
+              container.dataset.entriesJson = JSON.stringify(entries);
+              tbody.innerHTML = '';
+              emptyNote.hidden = (entries.length > 0);
+              tblWrap.hidden = (entries.length === 0);
+              rmBar.hidden = (entries.length === 0);
+
+              entries.forEach((item, idx) => {
+                const tr = document.createElement('tr');
+
+                const tdSel = document.createElement('td');
+                const rowCb = document.createElement('input');
+                rowCb.type = 'checkbox';
+                rowCb.dataset.bdayIdx = String(idx);
+                rowCb.setAttribute('aria-label', `Select ${item.name} (${item.date})`);
+                rowCb.addEventListener('change', syncRemoveBtn);
+                tdSel.appendChild(rowCb);
+
+                const thName = document.createElement('th');
+                thName.scope = 'row';
+                thName.textContent = item.name;
+
+                const tdDate = document.createElement('td');
+                tdDate.dataset.col = 'date';
+                tdDate.textContent = item.date;
+
+                const tdYear = document.createElement('td');
+                tdYear.dataset.col = 'year';
+                tdYear.textContent = item.birth_year != null ? String(item.birth_year) : '—';
+
+                const tdTheme = document.createElement('td');
+                tdTheme.dataset.col = 'theme';
+                const rowThemeSel = buildThemeSelect(`${cid}_row_theme_${idx}`, item.theme || '');
+                rowThemeSel.dataset.bdayThemeIdx = String(idx);
+                rowThemeSel.setAttribute('aria-label', `Theme for ${item.name}`);
+                rowThemeSel.addEventListener('change', () => {
+                  entries[idx].theme = rowThemeSel.value.trim() || null;
+                  container.dataset.entriesJson = JSON.stringify(entries);
+                  snapshotCurrentAppEditor();
+                });
+                tdTheme.appendChild(rowThemeSel);
+
+                tr.append(tdSel, thName, tdDate, tdYear, tdTheme);
+                tbody.appendChild(tr);
+              });
+              syncRemoveBtn();
+            };
+
+            addBtn.addEventListener('click', () => {
+              errMsg.hidden = true;
+              errMsg.style.display = 'none';
+              const parsed = normalizeBirthdayDate(dInp.value);
+              if (!parsed.ok) {
+                errMsg.textContent = parsed.error;
+                errMsg.hidden = false;
+                errMsg.style.display = 'block';
+                return;
+              }
+              const nm = nInp.value.trim();
+              if (!nm) {
+                errMsg.textContent = 'Enter a name for this birthday.';
+                errMsg.hidden = false;
+                errMsg.style.display = 'block';
+                return;
+              }
+              let yr = parsed.inferredYear ?? null;
+              const yRaw = yInp.value.trim();
+              if (yRaw !== '') {
+                const yNum = Number(yRaw);
+                if (!Number.isInteger(yNum) || yNum < 1900 || yNum > 2100) {
+                  errMsg.textContent = 'Birth year must be 1900-2100 (or leave blank).';
+                  errMsg.hidden = false;
+                  errMsg.style.display = 'block';
+                  return;
+                }
+                yr = yNum;
+              }
+              const thm = tSel.value.trim() || null;
+              entries.push({ date: parsed.date, name: nm, birth_year: yr, theme: thm });
+              dInp.value = '';
+              nInp.value = '';
+              yInp.value = '';
+              tSel.value = '';
+              renderBirthdayRows();
+              snapshotCurrentAppEditor();
+            });
+
+            rmBtn.addEventListener('click', () => {
+              const delIdx = new Set(
+                Array.from(tbody.querySelectorAll('input[data-bday-idx]:checked')).map((c) => Number(c.dataset.bdayIdx))
+              );
+              if (!delIdx.size) return;
+              entries = entries.filter((_, i) => !delIdx.has(i));
+              renderBirthdayRows();
+              snapshotCurrentAppEditor();
+            });
+
+            renderBirthdayRows();
+            container.append(addRow, errMsg, emptyNote, tblWrap, rmBar);
+            wrap.append(titleEl, container);
+          } else if (field.type === 'alarm_list') {
+            const titleEl = document.createElement('span');
+            titleEl.style.fontWeight = '600';
+            titleEl.textContent = field.label;
+
+            const container = document.createElement('div');
+            container.id = cid;
+            container.dataset.appId = app.app_id;
+            container.dataset.fieldKey = field.key;
+            container.dataset.fieldType = 'alarm_list';
+            if (hintId) container.setAttribute('aria-describedby', hintId);
+
+            const hasSavedAlarms = ('alarms' in savedAppCfg) || Boolean(savedAppCfg.alarm_time);
+            let entries = hasSavedAlarms
+              ? normalizeAlarmEntries(savedAppCfg.alarms, savedAppCfg)
+              : normalizeAlarmEntries(val, savedAppCfg);
+            container.dataset.entriesJson = JSON.stringify(entries);
+
+            const soundOpts = Array.isArray(field.options) ? field.options : [];
+            const themeSchemaField = schemaFields.find((sf) => sf.key === 'alarm_theme');
+            const themeOpts = Array.isArray(themeSchemaField?.options) && themeSchemaField.options.length
+              ? themeSchemaField.options
+              : [
+                  { value: 'sunrise', label: 'Warm Sunrise Bell' },
+                  { value: 'digital_pulse', label: 'Red/Cyan Digital Flash' },
+                  { value: 'siren_strobe', label: 'Emergency Siren Strobe' },
+                  { value: 'gentle_chime', label: 'Calm Morning Sparkle' },
+                ];
+            const buildSoundSelect = (selId, selectedVal) => {
+              const sel = document.createElement('select');
+              if (selId) sel.id = selId;
+              const defOpt = document.createElement('option');
+              defOpt.value = '';
+              defOpt.textContent = 'Default Sound';
+              sel.appendChild(defOpt);
+              for (const o of soundOpts) {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.label;
+                sel.appendChild(opt);
+              }
+              sel.value = (typeof selectedVal === 'string') ? selectedVal.trim() : '';
+              return sel;
+            };
+            const buildAlarmThemeSelect = (selId, selectedVal) => {
+              const sel = document.createElement('select');
+              if (selId) sel.id = selId;
+              const defOpt = document.createElement('option');
+              defOpt.value = '';
+              defOpt.textContent = 'Default Screen';
+              sel.appendChild(defOpt);
+              for (const o of themeOpts) {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.label;
+                sel.appendChild(opt);
+              }
+              sel.value = (typeof selectedVal === 'string') ? selectedVal.trim() : '';
+              return sel;
+            };
+
+            const addRow = document.createElement('div');
+            addRow.className = 'alarm-add-row';
+
+            const timeWrap = document.createElement('div');
+            timeWrap.className = 'field';
+            timeWrap.style.margin = '0';
+            const tmLbl = document.createElement('label');
+            tmLbl.htmlFor = `${cid}_add_time`;
+            tmLbl.textContent = 'Time';
+            const tmInp = document.createElement('input');
+            tmInp.type = 'time';
+            tmInp.id = `${cid}_add_time`;
+            tmInp.value = '07:00';
+            timeWrap.append(tmLbl, tmInp);
+
+            const lblWrap = document.createElement('div');
+            lblWrap.className = 'field';
+            lblWrap.style.margin = '0';
+            const lbLbl = document.createElement('label');
+            lbLbl.htmlFor = `${cid}_add_label`;
+            lbLbl.textContent = 'Label';
+            const lbInp = document.createElement('input');
+            lbInp.type = 'text';
+            lbInp.id = `${cid}_add_label`;
+            lbInp.maxLength = 24;
+            lbInp.placeholder = 'WAKE UP!';
+            lblWrap.append(lbLbl, lbInp);
+
+            const sndWrap = document.createElement('div');
+            sndWrap.className = 'field';
+            sndWrap.style.margin = '0';
+            const snLbl = document.createElement('label');
+            snLbl.htmlFor = `${cid}_add_sound`;
+            snLbl.textContent = 'Sound';
+            const snSel = buildSoundSelect(`${cid}_add_sound`, '');
+            sndWrap.append(snLbl, snSel);
+
+            const thmWrap = document.createElement('div');
+            thmWrap.className = 'field';
+            thmWrap.style.margin = '0';
+            const thLbl = document.createElement('label');
+            thLbl.htmlFor = `${cid}_add_theme`;
+            thLbl.textContent = 'Screen';
+            const thSel = buildAlarmThemeSelect(`${cid}_add_theme`, '');
+            thmWrap.append(thLbl, thSel);
+
+            const addBtn = document.createElement('button');
+            addBtn.type = 'button';
+            addBtn.className = 'small primary';
+            addBtn.id = `${cid}_add_btn`;
+            addBtn.textContent = '+ Add Alarm';
+
+            addRow.append(timeWrap, lblWrap, sndWrap, thmWrap, addBtn);
+
+            const repeatRow = document.createElement('div');
+            repeatRow.className = 'alarm-days-row';
+            repeatRow.style.alignItems = 'center';
+            const repCheckWrap = document.createElement('div');
+            repCheckWrap.className = 'check-row';
+            const repCb = document.createElement('input');
+            repCb.type = 'checkbox';
+            repCb.id = `${cid}_add_repeat`;
+            repCb.checked = false;
+            const repLbl = document.createElement('label');
+            repLbl.htmlFor = repCb.id;
+            repLbl.textContent = 'Repeat (unchecked = rings once and auto-deletes)';
+            repCheckWrap.append(repCb, repLbl);
+            repeatRow.appendChild(repCheckWrap);
+
+            const daysWrap = document.createElement('div');
+            daysWrap.hidden = true;
+
+            const daysQuickBar = document.createElement('div');
+            daysQuickBar.className = 'btn-bar';
+            daysQuickBar.style.margin = '0 0 0.35rem';
+            const wkBtn = document.createElement('button');
+            wkBtn.type = 'button';
+            wkBtn.className = 'small';
+            wkBtn.textContent = 'Weekdays';
+            const evBtn = document.createElement('button');
+            evBtn.type = 'button';
+            evBtn.className = 'small';
+            evBtn.textContent = 'Every Day';
+            const clrBtn = document.createElement('button');
+            clrBtn.type = 'button';
+            clrBtn.className = 'small';
+            clrBtn.textContent = 'Clear';
+            daysQuickBar.append(wkBtn, evBtn, clrBtn);
+
+            const daysRow = document.createElement('div');
+            daysRow.className = 'alarm-days-row';
+            const dayBoxes = [];
+            for (const [code, label] of ALARM_WEEKDAYS) {
+              const dRow = document.createElement('div');
+              dRow.className = 'check-row';
+              const dCb = document.createElement('input');
+              dCb.type = 'checkbox';
+              dCb.id = `${cid}_add_day_${code}`;
+              dCb.value = code;
+              dCb.checked = false;
+              const dLbl = document.createElement('label');
+              dLbl.htmlFor = dCb.id;
+              dLbl.textContent = label;
+              dRow.append(dCb, dLbl);
+              daysRow.appendChild(dRow);
+              dayBoxes.push(dCb);
+            }
+            daysWrap.append(daysQuickBar, daysRow);
+
+            const addErr = document.createElement('div');
+            addErr.className = 'error-msg';
+            addErr.setAttribute('role', 'alert');
+            addErr.hidden = true;
+
+            const syncRepeatUi = () => {
+              daysWrap.hidden = !repCb.checked;
+              addErr.hidden = true;
+              addErr.style.display = 'none';
+            };
+            repCb.addEventListener('change', syncRepeatUi);
+            wkBtn.addEventListener('click', () => {
+              dayBoxes.forEach((c) => { c.checked = ['mon', 'tue', 'wed', 'thu', 'fri'].includes(c.value); });
+              addErr.hidden = true;
+              addErr.style.display = 'none';
+            });
+            evBtn.addEventListener('click', () => {
+              dayBoxes.forEach((c) => { c.checked = true; });
+              addErr.hidden = true;
+              addErr.style.display = 'none';
+            });
+            clrBtn.addEventListener('click', () => {
+              dayBoxes.forEach((c) => { c.checked = false; });
+            });
+
+            const emptyNote = document.createElement('p');
+            emptyNote.className = 'hint';
+            emptyNote.textContent = 'No alarms set yet. Add one above and click Save App Settings.';
+
+            const tblWrap = document.createElement('div');
+            tblWrap.className = 'table-wrapper';
+            tblWrap.tabIndex = 0;
+            tblWrap.setAttribute('role', 'region');
+            tblWrap.setAttribute('aria-label', 'Scheduled alarms');
+
+            const tbl = document.createElement('table');
+            tbl.className = 'bday-table';
+            const thead = document.createElement('thead');
+            const headTr = document.createElement('tr');
+            for (const colName of ['On', 'Time', 'Label', 'Days', 'Sound', 'Screen', '']) {
+              const th = document.createElement('th');
+              th.scope = 'col';
+              th.textContent = colName;
+              headTr.appendChild(th);
+            }
+            thead.appendChild(headTr);
+            const tbody = document.createElement('tbody');
+            tbl.append(thead, tbody);
+            tblWrap.appendChild(tbl);
+
+            const renderAlarmRows = () => {
+              container.dataset.entriesJson = JSON.stringify(entries);
+              tbody.innerHTML = '';
+              emptyNote.hidden = (entries.length > 0);
+              tblWrap.hidden = (entries.length === 0);
+              const use24h = (currentServerAppSettings.alarm?.time_format === '24h');
+
+              entries.forEach((item, idx) => {
+                const tr = document.createElement('tr');
+
+                const tdOn = document.createElement('td');
+                const onCb = document.createElement('input');
+                onCb.type = 'checkbox';
+                onCb.checked = item.enabled !== false;
+                onCb.setAttribute('aria-label', `Enable ${formatAlarmClock(item.time, use24h)} ${item.label}`);
+                onCb.addEventListener('change', () => {
+                  entries[idx].enabled = onCb.checked;
+                  container.dataset.entriesJson = JSON.stringify(entries);
+                  snapshotCurrentAppEditor();
+                  renderHomeAlarmsSummary();
+                });
+                tdOn.appendChild(onCb);
+
+                const thTime = document.createElement('th');
+                thTime.scope = 'row';
+                thTime.textContent = formatAlarmClock(item.time, use24h);
+
+                const tdLabel = document.createElement('td');
+                tdLabel.textContent = item.label || 'WAKE UP!';
+
+                const tdDays = document.createElement('td');
+                tdDays.textContent = formatAlarmDays(item.days, item.repeat);
+
+                const tdSound = document.createElement('td');
+                const rowSndSel = buildSoundSelect(`${cid}_row_snd_${idx}`, item.sound || '');
+                rowSndSel.setAttribute('aria-label', `Sound for ${item.label}`);
+                rowSndSel.addEventListener('change', () => {
+                  entries[idx].sound = rowSndSel.value.trim();
+                  container.dataset.entriesJson = JSON.stringify(entries);
+                  snapshotCurrentAppEditor();
+                });
+                tdSound.appendChild(rowSndSel);
+
+                const tdTheme = document.createElement('td');
+                const rowThmSel = buildAlarmThemeSelect(`${cid}_row_thm_${idx}`, item.theme || '');
+                rowThmSel.setAttribute('aria-label', `Alarm screen for ${item.label}`);
+                rowThmSel.addEventListener('change', () => {
+                  entries[idx].theme = rowThmSel.value.trim();
+                  container.dataset.entriesJson = JSON.stringify(entries);
+                  snapshotCurrentAppEditor();
+                });
+                tdTheme.appendChild(rowThmSel);
+
+                const tdAct = document.createElement('td');
+                const delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.className = 'small danger';
+                delBtn.textContent = 'Remove';
+                delBtn.setAttribute('aria-label', `Remove ${formatAlarmClock(item.time, use24h)} ${item.label}`);
+                delBtn.addEventListener('click', () => {
+                  entries.splice(idx, 1);
+                  renderAlarmRows();
+                  snapshotCurrentAppEditor();
+                  renderHomeAlarmsSummary();
+                });
+                tdAct.appendChild(delBtn);
+
+                tr.append(tdOn, thTime, tdLabel, tdDays, tdSound, tdTheme, tdAct);
+                tbody.appendChild(tr);
+              });
+            };
+
+            addBtn.addEventListener('click', () => {
+              const isRep = Boolean(repCb.checked);
+              const dVals = isRep ? dayBoxes.filter((c) => c.checked).map((c) => c.value) : [];
+              if (isRep && dVals.length === 0) {
+                addErr.textContent = 'Select at least one day to repeat, or uncheck Repeat for a one-time alarm.';
+                addErr.hidden = false;
+                addErr.style.display = 'block';
+                return;
+              }
+              addErr.hidden = true;
+              addErr.style.display = 'none';
+              const tVal = normalizeAlarmTimeInput(tmInp.value);
+              const lVal = (lbInp.value || 'WAKE UP!').trim().slice(0, 24) || 'WAKE UP!';
+              const sVal = snSel.value.trim();
+              const thVal = thSel.value.trim();
+              entries.push({
+                id: `alarm_${Date.now().toString(36)}`,
+                enabled: true,
+                time: tVal,
+                repeat: isRep,
+                days: dVals,
+                label: lVal,
+                sound: sVal,
+                theme: thVal,
+              });
+              lbInp.value = '';
+              snSel.value = '';
+              thSel.value = '';
+              renderAlarmRows();
+              snapshotCurrentAppEditor();
+              renderHomeAlarmsSummary();
+            });
+
+            renderAlarmRows();
+            container.append(addRow, repeatRow, daysWrap, addErr, emptyNote, tblWrap);
+            wrap.append(titleEl, container);
           } else {
             const lbl = document.createElement('label');
             lbl.htmlFor = cid;
             lbl.textContent = field.label;
             const inp = document.createElement('input');
-            inp.type = field.type === 'number' ? 'number' : 'text';
+            inp.type = field.type === 'number' ? 'number' : (field.type === 'time' ? 'time' : 'text');
             inp.id = cid;
             inp.value = String(val ?? '');
+            if (field.type === 'number') {
+              if (field.min_value != null) inp.min = String(field.min_value);
+              if (field.max_value != null) inp.max = String(field.max_value);
+            }
             inp.dataset.appId = app.app_id;
             inp.dataset.fieldKey = field.key;
             inp.dataset.fieldType = field.type;
+            if (hintId) inp.setAttribute('aria-describedby', hintId);
             wrap.append(lbl, inp);
           }
-          host.appendChild(wrap);
+
+          if (field.description) {
+            const fh = document.createElement('p');
+            fh.className = 'hint';
+            fh.id = hintId;
+            fh.textContent = field.description;
+            wrap.appendChild(fh);
+          }
+
+          cfgBox.appendChild(wrap);
+        }
+        card.appendChild(cfgBox);
+      }
+
+      /* 2. Priority Box */
+      const priBox = document.createElement('div');
+      priBox.className = 'app-subbox';
+      const priTitle = document.createElement('h4');
+      priTitle.className = 'app-subbox-title';
+      priTitle.textContent = 'Priority';
+      const priField = document.createElement('div');
+      priField.className = 'field';
+      const priLbl = document.createElement('label');
+      priLbl.htmlFor = `sched_pri_${app.app_id}`;
+      priLbl.textContent = 'Priority Override (-1000 to 10000)';
+      const priInp = document.createElement('input');
+      priInp.type = 'number';
+      priInp.id = `sched_pri_${app.app_id}`;
+      priInp.min = '-1000';
+      priInp.max = '10000';
+      priInp.step = '1';
+      priInp.placeholder = `Default (${app.priority ?? 0})`;
+      priInp.value = (sched.priority !== null && sched.priority !== undefined) ? String(sched.priority) : '';
+      priInp.dataset.schedKey = 'priority';
+      priInp.setAttribute('aria-describedby', `sched_pri_hint_${app.app_id}`);
+      const priHint = document.createElement('p');
+      priHint.className = 'hint';
+      priHint.id = `sched_pri_hint_${app.app_id}`;
+      priHint.textContent = `Higher priority wins in Priority mode. Leave blank for app default (${app.priority ?? 0}).`;
+      priInp.addEventListener('change', () => {
+        snapshotCurrentAppEditor();
+        populateSelectedAppDropdown();
+      });
+      priField.append(priLbl, priInp, priHint);
+      priBox.append(priTitle, priField);
+      card.appendChild(priBox);
+
+      /* 3. Optional Scheduling Box */
+      const schedBox = document.createElement('div');
+      schedBox.className = 'app-subbox';
+      const schedPanelId = `sched_panel_${app.app_id}`;
+      const hasCust = hasCustomTimeSchedule(sched);
+
+      const toggleRow = document.createElement('div');
+      toggleRow.className = 'schedule-toggle-row';
+      const schedHeader = document.createElement('div');
+      const schedTitle = document.createElement('h4');
+      schedTitle.className = 'app-subbox-title';
+      schedTitle.style.margin = '0';
+      schedTitle.textContent = 'Scheduling';
+      const schedSummary = document.createElement('span');
+      schedSummary.className = 'hint';
+      schedSummary.textContent = hasCust ? 'Custom days, hours, or date window set.' : 'Optional: runs whenever enabled unless restricted.';
+      schedHeader.append(schedTitle, schedSummary);
+
+      const schedBtn = document.createElement('button');
+      schedBtn.type = 'button';
+      schedBtn.className = 'small';
+      schedBtn.setAttribute('aria-expanded', hasCust ? 'true' : 'false');
+      schedBtn.setAttribute('aria-controls', schedPanelId);
+      schedBtn.textContent = hasCust ? 'Hide Schedule' : 'Add Schedule';
+
+      const schedPanel = document.createElement('div');
+      schedPanel.id = schedPanelId;
+      schedPanel.className = 'schedule-panel';
+      schedPanel.hidden = !hasCust;
+
+      const syncSchedButton = () => {
+        snapshotCurrentAppEditor();
+        const cust = hasCustomTimeSchedule(currentServerAppSchedules[app.app_id]);
+        schedSummary.textContent = cust ? 'Custom days, hours, or date window set.' : 'Optional: runs whenever enabled unless restricted.';
+        schedBtn.textContent = schedPanel.hidden
+          ? (cust ? 'Edit Schedule' : 'Add Schedule')
+          : 'Hide Schedule';
+      };
+
+      schedBtn.addEventListener('click', () => {
+        const nextOpen = schedPanel.hidden;
+        schedPanel.hidden = !nextOpen;
+        schedBtn.setAttribute('aria-expanded', String(nextOpen));
+        syncSchedButton();
+      });
+
+      const schedEnRow = document.createElement('div');
+      schedEnRow.className = 'check-row';
+      const schedEnCb = document.createElement('input');
+      schedEnCb.type = 'checkbox';
+      schedEnCb.id = `sched_en_${app.app_id}`;
+      schedEnCb.checked = (sched.enabled !== false);
+      schedEnCb.dataset.schedKey = 'enabled';
+      const schedEnLbl = document.createElement('label');
+      schedEnLbl.htmlFor = schedEnCb.id;
+      schedEnLbl.textContent = 'Schedule Active (uncheck to pause window without disabling app)';
+      schedEnRow.append(schedEnCb, schedEnLbl);
+
+      const daysField = document.createElement('div');
+      daysField.className = 'field';
+      const daysTitle = document.createElement('span');
+      daysTitle.style.fontWeight = '600';
+      daysTitle.textContent = 'Days of Week (none selected = every day)';
+      const dayPills = document.createElement('div');
+      dayPills.className = 'day-pills';
+      const activeDays = new Set(Array.isArray(sched.days_of_week) ? sched.days_of_week : []);
+      for (const [dCode, dName] of DAYS_OF_WEEK) {
+        const pillLbl = document.createElement('label');
+        pillLbl.className = 'day-pill';
+        const dCb = document.createElement('input');
+        dCb.type = 'checkbox';
+        dCb.value = dCode;
+        dCb.checked = activeDays.has(dCode);
+        dCb.dataset.schedDay = dCode;
+        const dSpan = document.createElement('span');
+        dSpan.textContent = dName;
+        pillLbl.append(dCb, dSpan);
+        dayPills.appendChild(pillLbl);
+      }
+      daysField.append(daysTitle, dayPills);
+
+      const timeRow = document.createElement('div');
+      timeRow.className = 'field-row';
+      const startF = document.createElement('div');
+      startF.className = 'field';
+      const startLbl = document.createElement('label');
+      startLbl.htmlFor = `sched_st_${app.app_id}`;
+      startLbl.textContent = 'Start Time (optional)';
+      const startInp = document.createElement('input');
+      startInp.type = 'time';
+      startInp.id = `sched_st_${app.app_id}`;
+      startInp.value = sched.start_time || '';
+      startInp.dataset.schedKey = 'start_time';
+      startF.append(startLbl, startInp);
+
+      const endF = document.createElement('div');
+      endF.className = 'field';
+      const endLbl = document.createElement('label');
+      endLbl.htmlFor = `sched_et_${app.app_id}`;
+      endLbl.textContent = 'End Time (overnight supported)';
+      const endInp = document.createElement('input');
+      endInp.type = 'time';
+      endInp.id = `sched_et_${app.app_id}`;
+      endInp.value = sched.end_time || '';
+      endInp.dataset.schedKey = 'end_time';
+      endF.append(endLbl, endInp);
+      timeRow.append(startF, endF);
+
+      const dateRow = document.createElement('div');
+      dateRow.className = 'field-row';
+      const dsF = document.createElement('div');
+      dsF.className = 'field';
+      const dsLbl = document.createElement('label');
+      dsLbl.htmlFor = `sched_ds_${app.app_id}`;
+      dsLbl.textContent = 'Date Start (MM-DD)';
+      const dsInp = document.createElement('input');
+      dsInp.type = 'text';
+      dsInp.id = `sched_ds_${app.app_id}`;
+      dsInp.maxLength = 5;
+      dsInp.placeholder = 'e.g. 11-01';
+      dsInp.pattern = '^((0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01]))?$';
+      dsInp.value = sched.date_start || '';
+      dsInp.dataset.schedKey = 'date_start';
+      dsF.append(dsLbl, dsInp);
+
+      const deF = document.createElement('div');
+      deF.className = 'field';
+      const deLbl = document.createElement('label');
+      deLbl.htmlFor = `sched_de_${app.app_id}`;
+      deLbl.textContent = 'Date End (MM-DD, wrap supported)';
+      const deInp = document.createElement('input');
+      deInp.type = 'text';
+      deInp.id = `sched_de_${app.app_id}`;
+      deInp.maxLength = 5;
+      deInp.placeholder = 'e.g. 01-05';
+      deInp.pattern = '^((0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01]))?$';
+      deInp.value = sched.date_end || '';
+      deInp.dataset.schedKey = 'date_end';
+      deF.append(deLbl, deInp);
+      dateRow.append(dsF, deF);
+
+      const clearSchedBtn = document.createElement('button');
+      clearSchedBtn.type = 'button';
+      clearSchedBtn.className = 'small';
+      clearSchedBtn.textContent = 'Clear Custom Schedule';
+      clearSchedBtn.addEventListener('click', () => {
+        schedEnCb.checked = true;
+        dayPills.querySelectorAll('input[data-sched-day]').forEach((c) => { c.checked = false; });
+        startInp.value = '';
+        endInp.value = '';
+        dsInp.value = '';
+        deInp.value = '';
+        schedPanel.hidden = true;
+        schedBtn.setAttribute('aria-expanded', 'false');
+        syncSchedButton();
+      });
+
+      schedPanel.append(schedEnRow, daysField, timeRow, dateRow, clearSchedBtn);
+      toggleRow.append(schedHeader, schedBtn);
+      schedBox.append(toggleRow, schedPanel);
+      card.appendChild(schedBox);
+
+      host.appendChild(card);
+    }
+
+    function renderCloudAppSchemas() {
+      if (!loadedAppSchemas.length) {
+        updateEnabledSummaryAndNav();
+        populateSelectedAppDropdown();
+        renderSelectedAppEditor();
+        return;
+      }
+
+      if (!currentEnabledApps) {
+        const avail = Array.isArray(latestStatus?.available_apps) ? latestStatus.available_apps : [];
+        currentEnabledApps = new Set(avail);
+      }
+
+      populateSelectedAppDropdown();
+      updateEnabledSummaryAndNav();
+      renderSelectedAppEditor();
+      renderHomeAlarmsSummary();
+    }
+
+    appPickerSel.addEventListener('change', () => {
+      const card = document.querySelector('#cloud-apps-body [data-editor-app]');
+      if (card) {
+        const fields = card.querySelectorAll('input, select');
+        for (const el of fields) {
+          if (typeof el.checkValidity === 'function' && !el.checkValidity()) {
+            if (typeof el.reportValidity === 'function') el.reportValidity();
+            appPickerSel.value = selectedConfigAppId;
+            return;
+          }
         }
       }
+      snapshotCurrentAppEditor();
+      selectedConfigAppId = appPickerSel.value;
+      renderSelectedAppEditor();
+    });
+
+    document.getElementById('btn-reload-apps').addEventListener('click', () => {
+      snapshotCurrentAppEditor();
+      loadCloudMetadata(true);
+    });
+    document.getElementById('btn-enable-all-apps').addEventListener('click', () => {
+      if (!loadedAppSchemas.length) return;
+      snapshotCurrentAppEditor();
+      currentEnabledApps = new Set(loadedAppSchemas.map((a) => a.app_id));
+      renderCloudAppSchemas();
+      populateAppSelect(
+        document.getElementById('cfg-pinned-app'),
+        getEffectivePinApps(),
+        document.getElementById('cfg-pinned-app').value
+      );
+    });
+    document.getElementById('btn-clear-all-apps').addEventListener('click', () => {
+      if (!loadedAppSchemas.length) return;
+      snapshotCurrentAppEditor();
+      currentEnabledApps = new Set();
+      renderCloudAppSchemas();
+      populateAppSelect(document.getElementById('cfg-pinned-app'), getEffectivePinApps(), '');
+    });
+
+    function getEffectivePinApps(fallbackArr) {
+      if (loadedAppSchemas.length) {
+        const items = [];
+        for (const app of loadedAppSchemas) {
+          const screens = Array.isArray(app.screens) ? app.screens : [];
+          if (screens.length > 0) {
+            for (const scr of screens) {
+              const key = `${app.app_id}:${scr.screen_id}`;
+              items.push({
+                value: key,
+                label: `${app.name || app.app_id} — ${scr.name || scr.screen_id} (${key})`,
+              });
+            }
+          } else {
+            items.push({
+              value: app.app_id,
+              label: `${app.name || app.app_id} (${app.app_id})`,
+            });
+          }
+        }
+        return items;
+      }
+      if (Array.isArray(fallbackArr)) return fallbackArr;
+      return Array.isArray(latestStatus?.available_apps) ? latestStatus.available_apps : [];
+    }
+
+    function collectEnabledApps() {
+      if (!loadedAppSchemas.length) return undefined;
+      return loadedAppSchemas
+        .map((a) => a.app_id)
+        .filter((id) => currentEnabledApps && currentEnabledApps.has(id));
     }
 
     function collectAppSettings() {
+      snapshotCurrentAppEditor();
       const out = {};
-      document.querySelectorAll('#cloud-apps-body [data-app-id]').forEach((el) => {
-        const appId = el.dataset.appId;
-        const key = el.dataset.fieldKey;
-        const typ = el.dataset.fieldType;
-        if (!out[appId]) out[appId] = {};
-        if (typ === 'toggle') out[appId][key] = el.checked;
-        else if (typ === 'number') out[appId][key] = Number(el.value);
-        else out[appId][key] = el.value;
-      });
+      for (const app of loadedAppSchemas) {
+        const saved = currentServerAppSettings[app.app_id] || {};
+        const entry = {
+          enabled: currentEnabledApps ? currentEnabledApps.has(app.app_id) : Boolean(saved.enabled),
+        };
+        const schemaFields = Array.isArray(app.settings_schema) ? app.settings_schema : [];
+        for (const field of schemaFields) {
+          if (field.key === 'enabled') continue;
+          const val = (field.key in saved) ? saved[field.key] : field.default;
+          if (field.type === 'toggle') entry[field.key] = Boolean(val);
+          else if (field.type === 'number') entry[field.key] = Number(val ?? 0);
+          else if (field.type === 'multi_select') entry[field.key] = Array.isArray(val) ? [...val] : [];
+          else if (field.type === 'birthday_list') entry[field.key] = normalizeBirthdayEntries(val);
+          else if (field.type === 'alarm_list') {
+            entry[field.key] = normalizeAlarmEntries(Array.isArray(saved[field.key]) ? saved[field.key] : null, saved);
+            entry.alarm_time = '';
+            entry.alarm_days = [];
+            entry.alarm_label = '';
+          }
+          else entry[field.key] = String(val ?? '');
+        }
+        out[app.app_id] = entry;
+      }
       return out;
     }
 
-    async function loadCloudMetadata() {
+    function collectAppSchedules() {
+      snapshotCurrentAppEditor();
+      const out = {};
+      for (const app of loadedAppSchemas) {
+        const s = currentServerAppSchedules[app.app_id] || {};
+        out[app.app_id] = {
+          enabled: (s.enabled !== false),
+          priority: (s.priority !== null && s.priority !== undefined && s.priority !== '' && !Number.isNaN(Number(s.priority)))
+            ? Number(s.priority)
+            : null,
+          days_of_week: Array.isArray(s.days_of_week) ? [...s.days_of_week] : [],
+          start_time: s.start_time || null,
+          end_time: s.end_time || null,
+          date_start: s.date_start || null,
+          date_end: s.date_end || null,
+        };
+      }
+      return out;
+    }
+
+    async function loadCloudMetadata(announceResult = false) {
+      cloudMetaRunning = true;
+      syncBackgroundPolling();
       try {
-        const [appsRes, cfgRes] = await Promise.all([
-          fetch('/api/local/apps'),
-          fetch('/api/local/cloud-config'),
-        ]);
-        if (cfgRes.ok) {
+        const appsRes = await fetchWithTimeout('/api/local/apps', {}, 18000);
+        let cfgRes = null;
+        try {
+          cfgRes = await fetchWithTimeout('/api/local/cloud-config', {}, 18000);
+        } catch (_) {
+          cfgRes = null;
+        }
+        if (cfgRes && cfgRes.ok) {
           const cfgJson = await cfgRes.json();
           currentServerAppSettings = cfgJson.app_settings || {};
+          currentServerAppSchedules = cfgJson.app_schedules || {};
+          if (Array.isArray(cfgJson.enabled_apps)) {
+            currentEnabledApps = new Set(cfgJson.enabled_apps);
+          }
+          if (typeof cfgJson.selection_mode === 'string') {
+            selectionModeSel.value = cfgJson.selection_mode === 'rotate' ? 'rotate' : 'priority';
+          }
+          if (typeof cfgJson.rotation_seconds === 'number') {
+            rotationSecInp.value = String(cfgJson.rotation_seconds);
+          }
+          if ('rotate_include_clock' in cfgJson) {
+            rotateClockChk.checked = Boolean(cfgJson.rotate_include_clock);
+          }
+          syncRotationUI();
         }
-        if (appsRes.ok) {
+        if (appsRes && appsRes.ok) {
           const appsJson = await appsRes.json();
           loadedAppSchemas = appsJson.apps || [];
           renderCloudAppSchemas();
+          const pinSel = document.getElementById('cfg-pinned-app');
+          populateAppSelect(pinSel, getEffectivePinApps(), pinSel.value || latestStatus?.pinned_app);
+          populateAppSelect(quickAppSel, getEffectivePinApps(), quickAppSel.value || latestStatus?.pinned_app);
+          if (announceResult) {
+            setBanner(`Loaded ${loadedAppSchemas.length} app(s) from Clean Slate server.`, 'ok');
+          }
+        } else if (announceResult) {
+          setBanner('Could not load apps from server (check Server Tests).', 'err');
         }
       } catch (_) {
-        /* Server may be temporarily unreachable; keep static fallback notice */
+        if (announceResult) setBanner('Server unreachable while loading apps.', 'err');
+      } finally {
+        cloudMetaRunning = false;
+        syncBackgroundPolling();
       }
     }
-
-    let diagRunning = false;
 
     const previewCanvas = document.getElementById('matrix-preview');
     const previewCtx = previewCanvas.getContext('2d');
     const previewImg = previewCtx.createImageData(64, 32);
 
     async function fetchPreviewFrame() {
-      if (diagRunning || !liveMirrorUserEnabled || !liveContainerVisible || document.hidden) return;
+      if (diagRunning || cloudMetaRunning || activePage !== 'preview' || !liveMirrorUserEnabled || document.hidden) return;
       try {
-        const res = await fetch('/api/local/frame');
+        const res = await fetchWithTimeout('/api/local/frame', {}, 4000);
         if (!res.ok) return;
         const buf = new Uint8Array(await res.arrayBuffer());
         if (buf.byteLength !== 6144) return;
@@ -1483,19 +3802,43 @@
     }
 
     function populateAppSelect(sel, apps, selected) {
-      if (!Array.isArray(apps) || !apps.length) return;
-      const curVals = Array.from(sel.options).map((o) => o.value).join(',');
-      const nextVals = ['', ...apps].join(',');
-      if (curVals !== nextVals) {
+      if (!Array.isArray(apps)) return;
+      const labelFor = (item) => {
+        if (item && typeof item === 'object') return item.label || item.value;
+        const id = String(item);
+        const colon = id.indexOf(':');
+        if (colon > 0) {
+          const aId = id.slice(0, colon);
+          const sId = id.slice(colon + 1);
+          const match = loadedAppSchemas.find((a) => a.app_id === aId);
+          const scr = Array.isArray(match?.screens)
+            ? match.screens.find((s) => s.screen_id === sId)
+            : null;
+          if (match) {
+            return `${match.name || aId} — ${scr?.name || sId} (${id})`;
+          }
+          return id;
+        }
+        const match = loadedAppSchemas.find((a) => a.app_id === id);
+        return match ? `${match.name || id} (${id})` : id;
+      };
+      const entries = apps.map((item) => ({
+        value: (item && typeof item === 'object') ? String(item.value) : String(item),
+        label: labelFor(item),
+      }));
+      const nextSig = entries.map((e) => `${e.value}:${e.label}`).join('|');
+      if (sel.dataset.appsSig !== nextSig) {
         sel.innerHTML = '<option value="">Auto Schedule (recommended)</option>';
-        for (const id of apps) {
+        for (const e of entries) {
           const opt = document.createElement('option');
-          opt.value = id;
-          opt.textContent = id;
+          opt.value = e.value;
+          opt.textContent = e.label;
           sel.appendChild(opt);
         }
+        sel.dataset.appsSig = nextSig;
       }
-      sel.value = selected || '';
+      const values = entries.map((e) => e.value);
+      sel.value = values.includes(selected) ? selected : '';
     }
 
     const diagUrlInput = document.getElementById('diag-test-url');
@@ -1524,11 +3867,13 @@
     }
 
     function updateTelemetry(st) {
+      latestStatus = st;
       document.getElementById('pill-mode').textContent =
         st.ap_mode ? `Setup AP: ${st.ap_ssid}` : `Wi-Fi: ${st.wifi_ssid || 'Connecting'}`;
       document.getElementById('pill-ip').textContent = `IP: ${st.ip}`;
       document.getElementById('pill-device').textContent = `ID: ${st.device_id}`;
       document.getElementById('pill-app').textContent = `App: ${st.active_app || 'clock'}`;
+      renderHomeAlarmsSummary();
 
       const api = st.api_status || {};
       const s = st.settings || {};
@@ -1540,6 +3885,39 @@
         }
         syncApplyDiagButton();
       }
+
+      const wifiBadge = document.getElementById('nav-wifi-badge');
+      if (st.ap_mode && !st.wifi_connected) {
+        wifiBadge.textContent = 'Setup';
+        wifiBadge.setAttribute('data-tone', 'err');
+        wifiBadge.hidden = false;
+      } else {
+        wifiBadge.hidden = true;
+      }
+
+      const srvBadge = document.getElementById('nav-server-badge');
+      if (!st.wifi_connected) {
+        srvBadge.textContent = 'Offline';
+        srvBadge.setAttribute('data-tone', 'err');
+        srvBadge.hidden = false;
+      } else if (api.attempted && api.fail_count > 0) {
+        srvBadge.textContent = `${api.fail_count} Err`;
+        srvBadge.setAttribute('data-tone', 'err');
+        srvBadge.hidden = false;
+      } else if (api.attempted && api.ok) {
+        srvBadge.textContent = 'OK';
+        srvBadge.setAttribute('data-tone', 'ok');
+        srvBadge.hidden = false;
+      } else {
+        srvBadge.hidden = true;
+      }
+
+      document.getElementById('wifi-page-state').textContent = st.wifi_connected
+        ? `Connected to ${st.wifi_ssid || 'Wi-Fi'}`
+        : (st.ap_mode ? `Setup AP Active (${st.ap_ssid})` : 'Disconnected / Reconnecting');
+      document.getElementById('wifi-page-ip').textContent = `IP ${st.ip || '--'} • DNS ${st.dns_ip || 'none'}`;
+      document.getElementById('wifi-page-rssi').textContent = st.wifi_connected ? `${st.rssi} dBm` : '--';
+      document.getElementById('wifi-page-ap').textContent = st.ap_ssid || 'CleanSlate-XXXX';
 
       const pollEl = document.getElementById('diag-poll-state');
       if (!st.wifi_connected) {
@@ -1568,16 +3946,15 @@
         setDiagStep('wifi', 'Pass', 'pass', `Connected to ${st.wifi_ssid || 'Wi-Fi'} (${st.rssi} dBm), IP ${st.ip}, DNS ${st.dns_ip || 'none'}`);
       } else {
         netEl.textContent = `Wi-Fi offline (${st.ap_mode ? st.ap_ssid : 'reconnecting'})`;
-        setDiagStep('wifi', 'Fail', 'fail', 'ESP32 is not connected to a Wi-Fi router. Configure Wi-Fi above first.');
+        setDiagStep('wifi', 'Fail', 'fail', 'ESP32 is not connected to a Wi-Fi router. Configure Wi-Fi on the Wi-Fi page first.');
       }
 
+      const fwText = `v${st.firmware_version || '?'} • Time: ${st.sntp_synced ? 'synced' : 'pending'}`
+        + (st.ota_status && st.ota_status !== 'idle'
+            ? ` • OTA: ${st.ota_status}${st.ota_detail ? ` (${st.ota_detail})` : ''}`
+            : '');
       const fwHint = document.getElementById('fw-version-hint');
-      if (fwHint) {
-        const otaTxt = st.ota_status && st.ota_status !== 'idle'
-          ? ` • OTA: ${st.ota_status}${st.ota_detail ? ` (${st.ota_detail})` : ''}`
-          : '';
-        fwHint.textContent = `Running v${st.firmware_version || '?'} • Time sync: ${st.sntp_synced ? 'synced' : 'pending'}${otaTxt}`;
-      }
+      if (fwHint) fwHint.textContent = `Running ${fwText}`;
 
       if (awaitingOtaResult && st.ota_status && st.ota_status !== 'checking') {
         awaitingOtaResult = false;
@@ -1590,15 +3967,19 @@
         }
       }
 
+      const adcTxt = (typeof st.ambient_raw === 'number' && st.ambient_raw >= 0)
+        ? `sensor ${st.ambient_raw}/4095`
+        : 'sensor unavailable';
       const sensorHint = document.getElementById('bright-sensor-hint');
       if (sensorHint) {
-        const adcTxt = (typeof st.ambient_raw === 'number' && st.ambient_raw >= 0)
-          ? `sensor ${st.ambient_raw}/4095`
-          : 'sensor unavailable';
         sensorHint.textContent = `Current brightness: ${st.brightness ?? 128}/255 (${adcTxt}).`;
       }
+      const prevHint = document.getElementById('preview-telemetry-hint');
+      if (prevHint) {
+        prevHint.textContent = `Brightness: ${st.brightness ?? 128}/255 (${adcTxt}) • Volume: ${s.df_volume ?? 18}/30 • ${fwText}`;
+      }
 
-      populateAppSelect(quickAppSel, st.available_apps, st.pinned_app);
+      populateAppSelect(quickAppSel, getEffectivePinApps(st.available_apps), st.pinned_app);
     }
 
     diagUrlInput.addEventListener('input', () => {
@@ -1731,18 +4112,21 @@
       document.getElementById('cfg-api-url').value = targetUrl;
       document.getElementById('setup-api-url').value = targetUrl;
       delete diagUrlInput.dataset.edited;
-      settingsForm.requestSubmit();
+      saveAllSettings(diagApplyBtn);
     });
     document.getElementById('btn-test-cfg-url').addEventListener('click', () => {
       const cfgUrl = document.getElementById('cfg-api-url').value;
-      document.getElementById('diag-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
       runServerDiagnostics(cfgUrl);
     });
 
     async function pollTelemetryTick() {
-      if (diagRunning || !liveContainerVisible || document.hidden) return;
+      if (diagRunning || cloudMetaRunning || document.hidden) return;
+      if (!initialStatusLoaded) {
+        await loadStatus();
+        return;
+      }
       try {
-        const res = await fetch('/api/local/status');
+        const res = await fetchWithTimeout('/api/local/status', {}, 5000);
         if (res.ok) {
           const st = await res.json();
           updateTelemetry(st);
@@ -1750,22 +4134,25 @@
       } catch (_) {
         /* Keep quiet during temporary drops */
       }
-      await fetchPreviewFrame();
+      if (activePage === 'preview') {
+        await fetchPreviewFrame();
+      }
     }
 
     function syncBackgroundPolling() {
       clearInterval(pollTimer);
       pollTimer = null;
-      if (!diagRunning && liveContainerVisible && !document.hidden) {
-        pollTimer = setInterval(pollTelemetryTick, 2500);
+      if (!diagRunning && !cloudMetaRunning && !document.hidden) {
+        pollTimer = setInterval(pollTelemetryTick, activePage === 'preview' ? 2500 : 5000);
       }
     }
 
     async function loadStatus() {
       try {
-        const res = await fetch('/api/local/status');
+        const res = await fetchWithTimeout('/api/local/status', {}, 7000);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const st = await res.json();
+        initialStatusLoaded = true;
         updateTelemetry(st);
 
         const s = st.settings || {};
@@ -1774,14 +4161,14 @@
         document.getElementById('setup-api-url').value = s.api_base_url || '';
 
         document.getElementById('cfg-name').value = s.device_name || 'Clean Slate';
-        document.getElementById('cfg-teams').value = s.favorite_teams || 'ALA';
+        document.getElementById('cfg-teams').value = s.favorite_teams ?? '';
         document.getElementById('cfg-api-url').value = s.api_base_url || '';
         document.getElementById('cfg-tz').value = s.timezone || 'America/Chicago';
         document.getElementById('cfg-quiet-en').checked = Boolean(s.quiet_enabled);
         document.getElementById('cfg-quiet-start').value = s.quiet_start || '23:00';
         document.getElementById('cfg-quiet-end').value = s.quiet_end || '07:00';
         document.getElementById('cfg-ntp-server').value = s.ntp_server || 'pool.ntp.org';
-        document.getElementById('cfg-poll-sec').value = s.poll_interval_sec ?? 10;
+        document.getElementById('cfg-poll-sec').value = s.poll_interval_sec ?? 15;
         document.getElementById('cfg-ota-en').checked = Boolean(s.ota_enabled);
 
         const autoB = (s.brightness_override == null || s.brightness_override < 0);
@@ -1801,31 +4188,31 @@
         document.getElementById('cfg-boot-tone').checked = Boolean(s.boot_tone);
         document.getElementById('cfg-hourly-chime').checked = Boolean(s.hourly_chime);
         document.getElementById('cfg-rotary-idle').value = s.rotary_idle_sec ?? 30;
-        document.getElementById('cfg-fight-folder').value = s.fight_folder ?? 0;
+        document.getElementById('cfg-fight-folder').value = s.fight_folder ?? 1;
         document.getElementById('cfg-fight-track').value = s.fight_track ?? 1;
-        document.getElementById('cfg-victory-folder').value = s.victory_folder ?? 0;
+        document.getElementById('cfg-victory-folder').value = s.victory_folder ?? 1;
         document.getElementById('cfg-victory-track').value = s.victory_track ?? 2;
-        document.getElementById('cfg-third-folder').value = s.third_folder ?? 0;
+        document.getElementById('cfg-third-folder').value = s.third_folder ?? 1;
         document.getElementById('cfg-third-track').value = s.third_track ?? 3;
 
         populateAppSelect(document.getElementById('cfg-pinned-app'), st.available_apps, st.pinned_app);
 
-        const wifiDetails = document.getElementById('wifi-details');
         if (st.ap_mode && !st.wifi_connected) {
-          wifiDetails.open = true;
-          document.getElementById('settings-section').hidden = true;
-          setBanner('Setup Mode active. Choose your Wi-Fi network and favorite team below.');
+          setBanner('Setup Mode active. Choose your Wi-Fi network and favorite team on the Wi-Fi page.');
+          if (!userExplicitRoute) {
+            applyPageDOM('wifi', false);
+          }
           scanNetworks();
         } else {
-          wifiDetails.open = false;
-          document.getElementById('settings-section').hidden = false;
           setBanner(`Connected at ${st.ip} (${st.hostname}.local).`, 'ok');
+          await fetchPreviewFrame();
           loadCloudMetadata();
         }
-        await fetchPreviewFrame();
         syncBackgroundPolling();
       } catch (err) {
-        setBanner(`Could not load status: ${err.message}`, 'err');
+        const msg = err?.name === 'AbortError' ? 'timed out waiting for device' : (err?.message || 'network error');
+        setBanner(`Could not load status (${msg}). Retrying...`, 'err');
+        syncBackgroundPolling();
       }
     }
 
@@ -1846,8 +4233,8 @@
       setupSubmit.disabled = true;
       try {
         const body = {
-          wifi_ssid: document.getElementById('setup-ssid').value.trim(),
-          wifi_pass: document.getElementById('setup-pass').value,
+          wifi_ssid: ssidInp.value.trim(),
+          wifi_pass: passInput.value,
           favorite_team: document.getElementById('setup-team').value.trim().toUpperCase(),
           api_base_url: document.getElementById('setup-api-url').value.trim().replace(/\/+$/, ''),
         };
@@ -1866,7 +4253,7 @@
     });
 
     function collectSettingsPayload() {
-      return {
+      const payload = {
         device_name: document.getElementById('cfg-name').value.trim(),
         favorite_teams: document.getElementById('cfg-teams').value.trim().replace(/\s+/g, '').toUpperCase(),
         api_base_url: document.getElementById('cfg-api-url').value.trim().replace(/\/+$/, ''),
@@ -1892,8 +4279,17 @@
         third_folder: Number(document.getElementById('cfg-third-folder').value),
         third_track: Number(document.getElementById('cfg-third-track').value),
         pinned_app: document.getElementById('cfg-pinned-app').value,
-        app_settings: collectAppSettings(),
+        selection_mode: selectionModeSel.value === 'rotate' ? 'rotate' : 'priority',
+        rotation_seconds: Number(rotationSecInp.value || 20),
+        rotate_include_clock: rotateClockChk.checked,
       };
+      const enabledArr = collectEnabledApps();
+      if (enabledArr !== undefined) {
+        payload.enabled_apps = enabledArr;
+        payload.app_settings = collectAppSettings();
+        payload.app_schedules = collectAppSchedules();
+      }
+      return payload;
     }
 
     function applyImportedSettings(s) {
@@ -1938,22 +4334,52 @@
       if ('victory_track' in s) document.getElementById('cfg-victory-track').value = Number(s.victory_track);
       if ('third_folder' in s) document.getElementById('cfg-third-folder').value = Number(s.third_folder);
       if ('third_track' in s) document.getElementById('cfg-third-track').value = Number(s.third_track);
+      if (typeof s.selection_mode === 'string') {
+        selectionModeSel.value = s.selection_mode === 'rotate' ? 'rotate' : 'priority';
+      }
+      if ('rotation_seconds' in s) {
+        rotationSecInp.value = String(Number(s.rotation_seconds));
+      }
+      if ('rotate_include_clock' in s) {
+        rotateClockChk.checked = Boolean(s.rotate_include_clock);
+      }
+      syncRotationUI();
+      if (Array.isArray(s.enabled_apps)) {
+        currentEnabledApps = new Set(s.enabled_apps);
+      }
+      if (s.app_settings && typeof s.app_settings === 'object') {
+        currentServerAppSettings = s.app_settings;
+      }
+      if (s.app_schedules && typeof s.app_schedules === 'object') {
+        currentServerAppSchedules = s.app_schedules;
+      }
+      if (loadedAppSchemas.length) {
+        renderCloudAppSchemas();
+      }
       if (typeof s.pinned_app === 'string') {
         document.getElementById('cfg-pinned-app').value = s.pinned_app;
         quickAppSel.value = s.pinned_app;
       }
     }
 
-    const settingsForm = document.getElementById('settings-form');
-    const settingsSubmit = document.getElementById('btn-settings-submit');
-    settingsForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if (!settingsForm.checkValidity()) {
-        settingsForm.reportValidity();
-        focusFirstInvalid(settingsForm);
-        return;
+    async function saveAllSettings(triggerBtn) {
+      const formsToCheck = [
+        { form: document.getElementById('apps-form'), page: 'apps' },
+        { form: document.getElementById('settings-form'), page: 'device' },
+        { form: document.getElementById('server-url-form'), page: 'server' },
+      ];
+      for (const item of formsToCheck) {
+        if (!item.form.checkValidity()) {
+          if (activePage !== item.page) {
+            applyPageDOM(item.page, false);
+          }
+          item.form.reportValidity();
+          focusFirstInvalid(item.form);
+          return;
+        }
       }
-      settingsSubmit.disabled = true;
+
+      if (triggerBtn) triggerBtn.disabled = true;
       try {
         const payload = collectSettingsPayload();
         const res = await fetch('/api/local/settings', {
@@ -1979,8 +4405,21 @@
       } catch (err) {
         setBanner(`Failed saving settings: ${err.message}`, 'err');
       } finally {
-        settingsSubmit.disabled = false;
+        if (triggerBtn) triggerBtn.disabled = false;
       }
+    }
+
+    document.getElementById('apps-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveAllSettings(document.getElementById('btn-apps-submit'));
+    });
+    document.getElementById('settings-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveAllSettings(document.getElementById('btn-settings-submit'));
+    });
+    document.getElementById('server-url-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveAllSettings(document.getElementById('btn-save-server-url'));
     });
 
     const dialog = document.getElementById('confirm-dialog');
@@ -2013,8 +4452,12 @@
           awaitingOtaResult = true;
           setBanner('Checking firmware update server...', 'ok');
         } else if (action === 'set_app') {
-          document.getElementById('cfg-pinned-app').value = extra.app_id || '';
-          setBanner(extra.app_id ? `Switched screen to "${extra.app_id}".` : 'Switched to Auto Schedule.', 'ok');
+          const slotKey = extra.screen_id
+            ? `${extra.app_id}:${extra.screen_id}`
+            : (extra.app_id || '');
+          document.getElementById('cfg-pinned-app').value = slotKey;
+          quickAppSel.value = slotKey;
+          setBanner(slotKey ? `Switched screen to "${slotKey}".` : 'Switched to Auto Schedule.', 'ok');
           setTimeout(fetchPreviewFrame, 450);
         } else if (action === 'set_brightness') {
           setBanner(extra.brightness < 0 ? 'Auto-brightness enabled.' : `Brightness set to ${extra.brightness}/255.`, 'ok');
@@ -2054,26 +4497,9 @@
       triggerAction('set_volume', { volume: clamped });
     }
 
-    const previewCard = document.getElementById('preview-card');
-    const isContentVisSupported = 'contentVisibility' in document.documentElement.style;
-    if (isContentVisSupported) {
-      previewCard.addEventListener('contentvisibilityautostatechange', (event) => {
-        liveContainerVisible = !event.skipped;
-        syncBackgroundPolling();
-        if (liveContainerVisible) fetchPreviewFrame();
-      });
-    } else {
-      const obs = new IntersectionObserver((entries) => {
-        liveContainerVisible = entries.some((entry) => entry.isIntersecting);
-        syncBackgroundPolling();
-        if (liveContainerVisible) fetchPreviewFrame();
-      }, { rootMargin: '200px' });
-      obs.observe(previewCard);
-    }
-
     document.addEventListener('visibilitychange', () => {
       syncBackgroundPolling();
-      if (!document.hidden && liveContainerVisible) {
+      if (!document.hidden) {
         pollTelemetryTick();
       }
     });
@@ -2087,7 +4513,16 @@
     });
 
     quickAppSel.addEventListener('change', () => {
-      triggerAction('set_app', { app_id: quickAppSel.value });
+      const val = quickAppSel.value || '';
+      const colon = val.indexOf(':');
+      if (colon > 0) {
+        triggerAction('set_app', {
+          app_id: val.slice(0, colon),
+          screen_id: val.slice(colon + 1),
+        });
+      } else {
+        triggerAction('set_app', { app_id: val });
+      }
     });
 
     document.getElementById('btn-vol-down').addEventListener('click', () => applyQuickVolume(Number(volSlider.value) - 2));
@@ -2102,6 +4537,17 @@
     document.getElementById('btn-test-boot').addEventListener('click', () => triggerAction('test_boot_tone'));
     document.getElementById('btn-test-chime').addEventListener('click', () => triggerAction('test_chime'));
     document.getElementById('btn-stop-audio').addEventListener('click', () => triggerAction('stop_audio'));
+    document.getElementById('btn-dismiss-alarm-banner').addEventListener('click', () => triggerAction('dismiss_alarm'));
+    document.getElementById('btn-manage-alarms').addEventListener('click', () => {
+      selectedConfigAppId = 'alarm';
+      navigateTo('apps');
+      if (loadedAppSchemas.some((a) => a.app_id === 'alarm')) {
+        populateSelectedAppDropdown();
+        renderSelectedAppEditor();
+      } else {
+        loadCloudMetadata(false);
+      }
+    });
     document.getElementById('btn-refresh').addEventListener('click', () => triggerAction('refresh'));
     document.getElementById('btn-check-ota').addEventListener('click', () => triggerAction('check_ota'));
     document.getElementById('btn-export-cfg').addEventListener('click', () => {
@@ -2139,6 +4585,13 @@
       askConfirm('Factory Reset Device', 'Erase all saved settings (team, volume, timezone, brightness) and Wi-Fi credentials, then reboot into Setup mode?', 'factory_reset');
     });
 
+    {
+      const initialHash = pageFromHash();
+      if (initialHash) {
+        userExplicitRoute = true;
+        applyPageDOM(initialHash, false);
+      }
+    }
     loadStatus();
   </script>
 </body>

@@ -37,7 +37,7 @@ typedef struct {
     uint16_t victory_track;    /* Default 2 */
     uint8_t third_folder;      /* 0 = global DFPlayer track index, 1..99 = folder */
     uint16_t third_track;      /* Default 3 */
-    char pinned_app[32];       /* Empty = Auto schedule, else pinned app_id */
+    char pinned_app[64];       /* Empty = Auto schedule, else pinned app_id or app_id:screen_id */
     bool cloud_sync_pending;
 } cs_local_settings_t;
 
@@ -70,6 +70,67 @@ esp_err_t settings_store_clear_wifi(void);
  * Return true if non-empty Wi-Fi credentials are configured.
  */
 bool settings_store_has_wifi(void);
+
+#define CS_MAX_LOCAL_ALARMS 8
+
+typedef struct {
+    bool enabled;
+    bool repeat;         /* false = one-time alarm (auto-deletes after ringing); true = repeat on days_mask */
+    uint8_t hour;        /* 0..23 */
+    uint8_t minute;      /* 0..59 */
+    uint8_t days_mask;   /* bit 0=Sun .. 6=Sat (matches tm_wday); only used when repeat==true */
+    uint8_t folder;      /* DFPlayer folder (1..99) */
+    uint8_t track;       /* DFPlayer track (1..255) */
+    uint8_t theme_id;    /* 0=sunrise, 1=digital_pulse, 2=siren_strobe, 3=gentle_chime */
+    char id[25];         /* Alarm ID matching cloud config (e.g. "alarm_1") */
+    char label[25];      /* Short uppercase label, e.g. "WAKE UP!" */
+} cs_alarm_item_t;
+
+typedef struct {
+    bool app_enabled;
+    bool allow_during_quiet_hours;
+    bool use_24h;
+    uint8_t duration_minutes; /* 1..15, default 2 */
+    uint8_t volume;           /* 0..30, default 26 */
+    uint8_t count;            /* 0..CS_MAX_LOCAL_ALARMS */
+    cs_alarm_item_t items[CS_MAX_LOCAL_ALARMS];
+    uint8_t pending_delete_count;
+    char pending_delete_ids[CS_MAX_LOCAL_ALARMS][25];
+} cs_alarm_schedule_t;
+
+/**
+ * Copy current thread-safe snapshot of locally cached alarm schedule into out.
+ */
+void settings_store_get_alarms(cs_alarm_schedule_t *out);
+
+/**
+ * Save locally cached alarm schedule in memory and persist to NVS when changed.
+ */
+esp_err_t settings_store_save_alarms(const cs_alarm_schedule_t *in);
+
+/**
+ * Delete a fired one-time alarm locally from NVS and queue its ID for cloud DELETE sync.
+ */
+esp_err_t settings_store_consume_onetime_alarm(const char *alarm_id);
+
+/**
+ * Remove an alarm ID from the pending cloud-delete queue after cloud DELETE succeeds.
+ */
+esp_err_t settings_store_clear_pending_alarm_delete(const char *alarm_id);
+
+/**
+ * Parse a JSON object for `app_settings.alarm` (supporting both multi-alarm `alarms`
+ * array and legacy single-alarm keys) into a normalized cs_alarm_schedule_t.
+ */
+void settings_store_parse_alarms_json(bool app_enabled,
+                                      const char *alarm_obj_json,
+                                      size_t alarm_obj_len,
+                                      cs_alarm_schedule_t *out);
+
+/**
+ * Return the track-length-aligned repeat interval (ms) for a DFPlayer (folder, track) cue.
+ */
+uint32_t settings_store_alarm_repeat_interval_ms(uint8_t folder, uint8_t track);
 
 /**
  * Copy current API base URL (guaranteed non-empty).

@@ -8,6 +8,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -59,7 +60,10 @@ static const menu_tz_option_t k_menu_tz[] = {
 
 typedef struct {
     cs_device_config_t cfg;
-    int selected_app_idx; /* -1 = Auto schedule, >= 0 = pinned cfg.enabled_apps[idx] */
+    cs_rotary_slot_t rotary_slots[CS_MAX_ROTARY_SLOTS];
+    size_t rotary_slot_count;
+    int selected_app_idx; /* -1 = Auto schedule, >= 0 = rotary_slots[idx] */
+    char manual_pinned_slot[64];
     bool rotary_override_active;
     int64_t last_rotary_us;
     local_menu_page_t menu_page;
@@ -76,7 +80,7 @@ typedef struct {
     bool switching_pending;
     char switching_label[24];
     uint16_t rotary_idle_sec;
-    char active_app_id[32];
+    char active_app_id[64];
     char auto_app_id[32];
     char ota_status[24];
     char ota_detail[64];
@@ -91,8 +95,9 @@ static app_shared_state_t s_shared;
 
 typedef struct {
     bool valid;
-    char app_id[32];
-    uint8_t *bg_rgb888;
+    char app_id[64];
+    char etag[48];
+    uint8_t *bg_rgb565;
     cs_overlay_t overlays[CS_MAX_OVERLAYS];
     size_t overlay_count;
     bool quiet_mode;
@@ -116,6 +121,77 @@ static void *psram_prefer_calloc(size_t n, size_t size)
                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 }
 
+static void split_slot_key(const char *slot_key,
+                           char *app_out, size_t app_cap,
+                           char *screen_out, size_t screen_cap)
+{
+    if (app_out && app_cap > 0) {
+        app_out[0] = '\0';
+    }
+    if (screen_out && screen_cap > 0) {
+        screen_out[0] = '\0';
+    }
+    if (!slot_key || !*slot_key) {
+        return;
+    }
+    const char *colon = strchr(slot_key, ':');
+    if (colon) {
+        size_t alen = (size_t)(colon - slot_key);
+        if (app_out && app_cap > 0) {
+            if (alen >= app_cap) {
+                alen = app_cap - 1U;
+            }
+            memcpy(app_out, slot_key, alen);
+            app_out[alen] = '\0';
+        }
+        if (screen_out && screen_cap > 0) {
+            snprintf(screen_out, screen_cap, "%s", colon + 1);
+        }
+    } else if (app_out && app_cap > 0) {
+        snprintf(app_out, app_cap, "%s", slot_key);
+    }
+}
+
+static int find_rotary_slot_idx_locked(const char *key)
+{
+    if (!key || !*key) {
+        return -1;
+    }
+    for (size_t i = 0; i < s_shared.rotary_slot_count; i++) {
+        if (strcmp(s_shared.rotary_slots[i].key, key) == 0) {
+            return (int)i;
+        }
+    }
+    if (strchr(key, ':') == NULL) {
+        for (size_t i = 0; i < s_shared.rotary_slot_count; i++) {
+            if (strcmp(s_shared.rotary_slots[i].app_id, key) == 0) {
+                return (int)i;
+            }
+        }
+    }
+    return -1;
+}
+
+static void rebuild_rotary_slots_locked(const char *preserve_key)
+{
+    char prev[64] = {0};
+    if (preserve_key && preserve_key[0]) {
+        snprintf(prev, sizeof(prev), "%s", preserve_key);
+    } else if (s_shared.selected_app_idx >= 0 &&
+               s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
+        snprintf(prev, sizeof(prev), "%s",
+                 s_shared.rotary_slots[s_shared.selected_app_idx].key);
+    }
+
+    s_shared.rotary_slot_count = api_client_expand_rotary_slots(
+        &s_shared.cfg, s_shared.rotary_slots, CS_MAX_ROTARY_SLOTS);
+    if (prev[0]) {
+        s_shared.selected_app_idx = find_rotary_slot_idx_locked(prev);
+    } else {
+        s_shared.selected_app_idx = -1;
+    }
+}
+
 static void format_app_short_label(const char *app_id, char *out, size_t cap)
 {
     if (!out || cap == 0) {
@@ -123,16 +199,33 @@ static void format_app_short_label(const char *app_id, char *out, size_t cap)
     }
     const char *src = "AUTO";
     if (app_id && app_id[0]) {
-        if (strcmp(app_id, "cfb_scoreboard") == 0) {
+        char app_part[32] = {0};
+        char scr_part[24] = {0};
+        split_slot_key(app_id, app_part, sizeof(app_part), scr_part, sizeof(scr_part));
+        if (scr_part[0]) {
+            if (strcmp(scr_part, "scoreboard") == 0) {
+                src = (strcmp(app_part, "cbb_scoreboard") == 0) ? "CBB SCORES" : "CFB SCORES";
+            } else if (strcmp(scr_part, "countdown_time") == 0) {
+                src = "COUNTDOWN";
+            } else if (strcmp(scr_part, "tv_info") == 0) {
+                src = "TV & WEATHER";
+            } else {
+                src = scr_part;
+            }
+        } else if (strcmp(app_part, "cfb_scoreboard") == 0) {
             src = "SCOREBOARD";
-        } else if (strcmp(app_id, "cfb_countdown_clock") == 0) {
+        } else if (strcmp(app_part, "cfb_countdown_clock") == 0) {
             src = "COUNTDOWN";
-        } else if (strcmp(app_id, "cfb_gameday_info") == 0) {
+        } else if (strcmp(app_part, "cfb_gameday_info") == 0) {
             src = "GAMEDAY";
-        } else if (strcmp(app_id, "clock") == 0) {
+        } else if (strcmp(app_part, "cbb_scoreboard") == 0) {
+            src = "CBB SCORES";
+        } else if (strcmp(app_part, "clock") == 0) {
             src = "CLOCK";
+        } else if (strcmp(app_part, "alarm") == 0) {
+            src = "ALARM";
         } else {
-            src = app_id;
+            src = app_part;
         }
     }
     size_t i = 0;
@@ -143,18 +236,19 @@ static void format_app_short_label(const char *app_id, char *out, size_t cap)
 }
 
 static void cache_store_frame_locked(const char *app_id,
-                                     const uint8_t *bg,
+                                     const uint8_t *bg_rgb565,
+                                     const char *etag,
                                      const cs_overlay_t *overlays,
                                      size_t overlay_count,
                                      bool quiet_mode,
                                      uint32_t refresh_seconds)
 {
-    if (!s_frame_cache || !app_id || !app_id[0] || !bg) {
+    if (!s_frame_cache || !app_id || !app_id[0] || !bg_rgb565) {
         return;
     }
     int slot = -1;
     int free_slot = -1;
-    for (int i = 0; i < CS_MAX_APPS; i++) {
+    for (int i = 0; i < CS_MAX_ROTARY_SLOTS; i++) {
         if (s_frame_cache[i].valid && strcmp(s_frame_cache[i].app_id, app_id) == 0) {
             slot = i;
             break;
@@ -167,14 +261,19 @@ static void cache_store_frame_locked(const char *app_id,
         slot = (free_slot >= 0) ? free_slot : 0;
     }
     app_frame_cache_entry_t *e = &s_frame_cache[slot];
-    if (!e->bg_rgb888) {
-        e->bg_rgb888 = psram_prefer_malloc(CS_FRAME_RGB888_BYTES);
+    if (!e->bg_rgb565) {
+        e->bg_rgb565 = psram_prefer_malloc(CS_FRAME_RGB565_BYTES);
     }
-    if (!e->bg_rgb888) {
+    if (!e->bg_rgb565) {
         return;
     }
     snprintf(e->app_id, sizeof(e->app_id), "%s", app_id);
-    memcpy(e->bg_rgb888, bg, CS_FRAME_RGB888_BYTES);
+    if (etag && etag[0]) {
+        snprintf(e->etag, sizeof(e->etag), "%s", etag);
+    } else {
+        e->etag[0] = '\0';
+    }
+    memcpy(e->bg_rgb565, bg_rgb565, CS_FRAME_RGB565_BYTES);
     size_t cnt = (overlay_count > CS_MAX_OVERLAYS) ? CS_MAX_OVERLAYS : overlay_count;
     e->overlay_count = cnt;
     if (cnt > 0 && overlays) {
@@ -186,13 +285,50 @@ static void cache_store_frame_locked(const char *app_id,
     e->valid = true;
 }
 
+static bool cache_get_etag_locked(const char *app_id, char *out_etag, size_t cap)
+{
+    if (!out_etag || cap == 0) {
+        return false;
+    }
+    out_etag[0] = '\0';
+    if (!s_frame_cache || !app_id || !app_id[0]) {
+        return false;
+    }
+    for (int i = 0; i < CS_MAX_ROTARY_SLOTS; i++) {
+        const app_frame_cache_entry_t *e = &s_frame_cache[i];
+        if (e->valid && e->bg_rgb565 && e->etag[0] && strcmp(e->app_id, app_id) == 0) {
+            snprintf(out_etag, cap, "%s", e->etag);
+            return true;
+        }
+    }
+    return false;
+}
+
+static void cache_touch_slot_locked(const char *app_id, uint32_t refresh_seconds)
+{
+    if (!s_frame_cache || !app_id || !app_id[0]) {
+        return;
+    }
+    for (int i = 0; i < CS_MAX_ROTARY_SLOTS; i++) {
+        app_frame_cache_entry_t *e = &s_frame_cache[i];
+        if (e->valid && strcmp(e->app_id, app_id) == 0) {
+            e->fetched_at_us = esp_timer_get_time();
+            if (refresh_seconds >= 1U) {
+                e->refresh_seconds = refresh_seconds;
+            }
+            return;
+        }
+    }
+}
+
 static void cache_invalidate_all_locked(void)
 {
     if (!s_frame_cache) {
         return;
     }
-    for (int i = 0; i < CS_MAX_APPS; i++) {
+    for (int i = 0; i < CS_MAX_ROTARY_SLOTS; i++) {
         s_frame_cache[i].valid = false;
+        s_frame_cache[i].etag[0] = '\0';
         s_frame_cache[i].fetched_at_us = 0;
     }
 }
@@ -207,24 +343,26 @@ static bool cache_pick_bg_refresh_app_locked(int64_t now_us, char *out_app, size
     const char *oldest_stale_app = NULL;
     int64_t oldest_fetched_us = INT64_MAX;
 
-    for (size_t i = 0; i < s_shared.cfg.enabled_app_count; i++) {
-        const char *app_id = s_shared.cfg.enabled_apps[i];
-        if (!app_id[0]) {
+    for (size_t i = 0; i < s_shared.rotary_slot_count; i++) {
+        const char *slot_key = s_shared.rotary_slots[i].key;
+        if (!slot_key[0] ||
+            strcmp(slot_key, "alarm") == 0 ||
+            strncmp(slot_key, "alarm:", 6) == 0) {
             continue;
         }
         const app_frame_cache_entry_t *match = NULL;
-        for (int j = 0; j < CS_MAX_APPS; j++) {
-            if (s_frame_cache[j].valid && s_frame_cache[j].bg_rgb888 &&
-                strcmp(s_frame_cache[j].app_id, app_id) == 0) {
+        for (int j = 0; j < CS_MAX_ROTARY_SLOTS; j++) {
+            if (s_frame_cache[j].valid && s_frame_cache[j].bg_rgb565 &&
+                strcmp(s_frame_cache[j].app_id, slot_key) == 0) {
                 match = &s_frame_cache[j];
                 break;
             }
         }
         if (!match) {
-            snprintf(out_app, cap, "%s", app_id);
+            snprintf(out_app, cap, "%s", slot_key);
             return true;
         }
-        if (s_shared.auto_app_id[0] && strcmp(app_id, s_shared.auto_app_id) == 0) {
+        if (s_shared.auto_app_id[0] && strcmp(slot_key, s_shared.auto_app_id) == 0) {
             continue;
         }
         uint32_t ttl_sec = (match->refresh_seconds >= 30U)
@@ -233,7 +371,7 @@ static bool cache_pick_bg_refresh_app_locked(int64_t now_us, char *out_app, size
         if ((now_us - match->fetched_at_us) >= (int64_t)ttl_sec * 1000000LL) {
             if (match->fetched_at_us < oldest_fetched_us) {
                 oldest_fetched_us = match->fetched_at_us;
-                oldest_stale_app = app_id;
+                oldest_stale_app = slot_key;
             }
         }
     }
@@ -251,10 +389,10 @@ static bool cache_apply_app_locked(const char *target_app_id)
                              ? target_app_id
                              : (s_shared.auto_app_id[0] ? s_shared.auto_app_id : NULL);
     if (s_frame_cache && lookup && s_shared.bg_rgb888) {
-        for (int i = 0; i < CS_MAX_APPS; i++) {
+        for (int i = 0; i < CS_MAX_ROTARY_SLOTS; i++) {
             app_frame_cache_entry_t *e = &s_frame_cache[i];
-            if (e->valid && e->bg_rgb888 && strcmp(e->app_id, lookup) == 0) {
-                memcpy(s_shared.bg_rgb888, e->bg_rgb888, CS_FRAME_RGB888_BYTES);
+            if (e->valid && e->bg_rgb565 && strcmp(e->app_id, lookup) == 0) {
+                gfx_rgb565be_to_rgb888(e->bg_rgb565, CS_FRAME_PIXELS, s_shared.bg_rgb888);
                 s_shared.overlay_count = e->overlay_count;
                 if (e->overlay_count > 0) {
                     memcpy(s_shared.overlays, e->overlays,
@@ -274,9 +412,19 @@ static bool cache_apply_app_locked(const char *target_app_id)
     return false;
 }
 
+typedef struct {
+    char id[25];
+    uint32_t occ_key;
+} alarm_occ_record_t;
+
 static volatile bool s_alert_playing;
+static volatile bool s_alarm_ringing;
 static volatile bool s_dismiss_alert;
+static alarm_occ_record_t s_last_alarm_occ[CS_MAX_LOCAL_ALARMS * 2];
+static size_t s_last_alarm_occ_next;
+static int64_t s_suppress_server_alarm_until_us;
 static volatile bool s_force_ota_check;
+static volatile bool s_force_cfg_sync;
 static int s_last_auto_b = -1;
 
 #define MENU_IDLE_TIMEOUT_SEC (20U)
@@ -311,8 +459,6 @@ static void init_default_config(cs_device_config_t *cfg)
     static const char *k_default_apps[] = {
         "clock",
         "cfb_scoreboard",
-        "cfb_countdown_clock",
-        "cfb_gameday_info",
     };
 
     memset(cfg, 0, sizeof(*cfg));
@@ -342,24 +488,59 @@ static void portal_get_status(char *active_app, size_t active_cap,
     if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         snprintf(active_app, active_cap, "%s",
                  s_shared.active_app_id[0] ? s_shared.active_app_id : "clock");
-        if (s_shared.selected_app_idx >= 0 &&
-            s_shared.selected_app_idx < (int)s_shared.cfg.enabled_app_count) {
+        if (s_shared.manual_pinned_slot[0] != '\0') {
+            snprintf(pinned_app, pinned_cap, "%s", s_shared.manual_pinned_slot);
+        } else if (s_shared.selected_app_idx >= 0 &&
+                   s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
             snprintf(pinned_app, pinned_cap, "%s",
-                     s_shared.cfg.enabled_apps[s_shared.selected_app_idx]);
+                     s_shared.rotary_slots[s_shared.selected_app_idx].key);
         } else if (pinned_cap > 0) {
             pinned_app[0] = '\0';
         }
 
         size_t pos = 0;
-        pos += (size_t)snprintf(apps_json_arr + pos, apps_cap - pos, "[");
-        for (size_t i = 0; i < s_shared.cfg.enabled_app_count && pos + 36 < apps_cap; i++) {
-            if (i > 0) {
-                apps_json_arr[pos++] = ',';
+        if (apps_cap > 2) {
+            apps_json_arr[pos++] = '[';
+            if (s_shared.rotary_slot_count > 0) {
+                for (size_t i = 0; i < s_shared.rotary_slot_count; i++) {
+                    const char *k = s_shared.rotary_slots[i].key;
+                    size_t need = strlen(k) + 4U;
+                    if (pos + need >= apps_cap) {
+                        break;
+                    }
+                    if (i > 0) {
+                        apps_json_arr[pos++] = ',';
+                    }
+                    int n = snprintf(apps_json_arr + pos, apps_cap - pos, "\"%s\"", k);
+                    if (n > 0) {
+                        pos += (size_t)n;
+                    }
+                }
+            } else {
+                size_t count = s_shared.cfg.enabled_app_count;
+                if (count > CS_MAX_APPS) {
+                    count = CS_MAX_APPS;
+                }
+                for (size_t i = 0; i < count; i++) {
+                    const char *k = s_shared.cfg.enabled_apps[i];
+                    size_t need = strlen(k) + 4U;
+                    if (pos + need >= apps_cap) {
+                        break;
+                    }
+                    if (i > 0) {
+                        apps_json_arr[pos++] = ',';
+                    }
+                    int n = snprintf(apps_json_arr + pos, apps_cap - pos, "\"%s\"", k);
+                    if (n > 0) {
+                        pos += (size_t)n;
+                    }
+                }
             }
-            pos += (size_t)snprintf(apps_json_arr + pos, apps_cap - pos, "\"%s\"",
-                                    s_shared.cfg.enabled_apps[i]);
+            if (pos + 1 < apps_cap) {
+                apps_json_arr[pos++] = ']';
+            }
+            apps_json_arr[pos] = '\0';
         }
-        snprintf(apps_json_arr + pos, (pos < apps_cap) ? (apps_cap - pos) : 0, "]");
 
         if (quiet_mode_out) {
             *quiet_mode_out = s_shared.last_quiet_mode;
@@ -368,6 +549,30 @@ static void portal_get_status(char *active_app, size_t active_cap,
     }
     if (brightness_out) {
         *brightness_out = hub75_get_brightness();
+    }
+}
+
+static bool portal_get_active_events(bool *birthdays_active, bool *holidays_active)
+{
+    bool known = false;
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        known = s_shared.cfg.active_events_known;
+        if (birthdays_active) {
+            *birthdays_active = s_shared.cfg.active_event_birthdays;
+        }
+        if (holidays_active) {
+            *holidays_active = s_shared.cfg.active_event_holidays;
+        }
+        xSemaphoreGive(s_state_mutex);
+    }
+    return known;
+}
+
+static void portal_on_apps_metadata_synced(void)
+{
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        rebuild_rotary_slots_locked(NULL);
+        xSemaphoreGive(s_state_mutex);
     }
 }
 
@@ -434,19 +639,74 @@ static void portal_on_apply_brightness(int brightness_override)
     }
 }
 
+static bool step_rotary_app_locked(int step)
+{
+    int n = (int)s_shared.rotary_slot_count;
+    s_shared.manual_pinned_slot[0] = '\0';
+    if (n <= 0 || step == 0) {
+        return false;
+    }
+    const char *auto_id = s_shared.auto_app_id[0]
+                              ? s_shared.auto_app_id
+                              : s_shared.active_app_id;
+    int auto_idx = find_rotary_slot_idx_locked(auto_id);
+    if (auto_idx >= 0) {
+        /* Step relative to the currently shown Auto slot so 1 click either way always switches screens */
+        int cur = (s_shared.selected_app_idx < 0) ? auto_idx : s_shared.selected_app_idx;
+        int next = ((cur + step) % n + n) % n;
+        s_shared.selected_app_idx = (next == auto_idx) ? -1 : next;
+    } else {
+        int span = n + 1;
+        int pos = s_shared.selected_app_idx + 1;
+        pos = ((pos + step) % span + span) % span;
+        s_shared.selected_app_idx = pos - 1;
+    }
+    s_shared.last_rotary_us = esp_timer_get_time();
+    s_shared.rotary_override_active = (s_shared.selected_app_idx >= 0);
+    const char *sel = (s_shared.selected_app_idx < 0 ||
+                       s_shared.selected_app_idx >= (int)s_shared.rotary_slot_count)
+                          ? NULL
+                          : s_shared.rotary_slots[s_shared.selected_app_idx].key;
+    bool hit = cache_apply_app_locked(sel);
+    ESP_LOGI(TAG, "Rotary app mode -> %s (idx=%d/%d, cached=%s)",
+             sel ? sel : "auto", s_shared.selected_app_idx, n,
+             hit ? "yes" : "no");
+    return true;
+}
+
+static void portal_on_step_app(int delta)
+{
+    bool stepped = false;
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        stepped = step_rotary_app_locked(delta);
+        xSemaphoreGive(s_state_mutex);
+    }
+    if (stepped) {
+        if (s_render_task) {
+            xTaskNotifyGive(s_render_task);
+        }
+        if (s_api_task) {
+            xTaskNotifyGive(s_api_task);
+        }
+    }
+}
+
 static void portal_on_set_pinned_app(const char *app_id)
 {
     if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         s_shared.selected_app_idx = -1;
+        s_shared.manual_pinned_slot[0] = '\0';
         s_shared.rotary_override_active = false;
         const char *target = NULL;
         if (app_id && app_id[0] != '\0') {
-            for (size_t i = 0; i < s_shared.cfg.enabled_app_count; i++) {
-                if (strcmp(s_shared.cfg.enabled_apps[i], app_id) == 0) {
-                    s_shared.selected_app_idx = (int)i;
-                    target = s_shared.cfg.enabled_apps[i];
-                    break;
-                }
+            int idx = find_rotary_slot_idx_locked(app_id);
+            if (idx >= 0) {
+                s_shared.selected_app_idx = idx;
+                target = s_shared.rotary_slots[idx].key;
+            } else {
+                snprintf(s_shared.manual_pinned_slot, sizeof(s_shared.manual_pinned_slot),
+                         "%s", app_id);
+                target = s_shared.manual_pinned_slot;
             }
         }
         cache_apply_app_locked(target);
@@ -505,15 +765,18 @@ static void portal_on_settings_updated(const cs_local_settings_t *settings, cons
 
         if (pinned_app != NULL) {
             s_shared.selected_app_idx = -1;
+            s_shared.manual_pinned_slot[0] = '\0';
             s_shared.rotary_override_active = false;
             const char *target = NULL;
             if (pinned_app[0] != '\0') {
-                for (size_t i = 0; i < s_shared.cfg.enabled_app_count; i++) {
-                    if (strcmp(s_shared.cfg.enabled_apps[i], pinned_app) == 0) {
-                        s_shared.selected_app_idx = (int)i;
-                        target = s_shared.cfg.enabled_apps[i];
-                        break;
-                    }
+                int idx = find_rotary_slot_idx_locked(pinned_app);
+                if (idx >= 0) {
+                    s_shared.selected_app_idx = idx;
+                    target = s_shared.rotary_slots[idx].key;
+                } else {
+                    snprintf(s_shared.manual_pinned_slot, sizeof(s_shared.manual_pinned_slot),
+                             "%s", pinned_app);
+                    target = s_shared.manual_pinned_slot;
                 }
             }
             cache_apply_app_locked(target);
@@ -577,6 +840,11 @@ static void play_manual_song(uint8_t slot)
              label, (unsigned)folder, (unsigned)track, (unsigned)local.df_volume);
 }
 
+static bool portal_is_alarm_ringing(void)
+{
+    return s_alarm_ringing;
+}
+
 static void portal_on_audio_action(const char *action)
 {
     if (!action) {
@@ -622,6 +890,7 @@ static void portal_on_request_ota(void)
 
 static void portal_on_request_refresh(void)
 {
+    s_force_cfg_sync = true;
     if (s_api_task) {
         xTaskNotifyGive(s_api_task);
     }
@@ -651,6 +920,29 @@ static bool is_quiet_now(void)
     return sntp_time_in_quiet_hours(q_enabled, q_start, q_end);
 }
 
+static bool has_local_active_alarm(void)
+{
+    cs_alarm_schedule_t sched;
+    settings_store_get_alarms(&sched);
+    if (!sched.app_enabled || sched.count == 0U) {
+        return false;
+    }
+    for (uint8_t i = 0; i < sched.count && i < CS_MAX_LOCAL_ALARMS; i++) {
+        if (sched.items[i].enabled) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void draw_mini_alarm_bell(uint8_t *fb, int bx, int by)
+{
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, bx + 2, by, 1, 1, 255, 205, 55);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, bx + 1, by + 1, 3, 2, 255, 205, 55);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, bx, by + 3, 5, 1, 255, 205, 55);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, bx + 2, by + 4, 1, 1, 255, 245, 195);
+}
+
 static void render_local_fallback(uint8_t *fb)
 {
     memset(fb, 0, CS_FRAME_RGB888_BYTES);
@@ -671,6 +963,9 @@ static void render_local_fallback(uint8_t *fb)
                               32, 7, tbuf, GFX_FONT_5X7, GFX_ALIGN_CENTER, 255, 255, 255);
         gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
                               32, 19, dbuf, GFX_FONT_3X5, GFX_ALIGN_CENTER, 120, 180, 255);
+        if (has_local_active_alarm()) {
+            draw_mini_alarm_bell(fb, 58, 25);
+        }
     } else if (!wifi_manager_is_connected()) {
         gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
                               32, 7, "CLEAN SLATE", GFX_FONT_3X5, GFX_ALIGN_CENTER, 180, 220, 255);
@@ -687,8 +982,15 @@ static void render_local_fallback(uint8_t *fb)
 static void composite_overlays(uint8_t *fb, const cs_overlay_t *overlays, size_t count)
 {
     char text[64];
+    bool has_clock_time = false;
+    bool has_clock_date = false;
     for (size_t i = 0; i < count; i++) {
         const cs_overlay_t *ov = &overlays[i];
+        if (strcmp(ov->id, "clock_time") == 0) {
+            has_clock_time = true;
+        } else if (strcmp(ov->id, "clock_date") == 0) {
+            has_clock_date = true;
+        }
         text[0] = '\0';
         switch (ov->type) {
         case CS_OVERLAY_NTP_TIME:
@@ -715,6 +1017,9 @@ static void composite_overlays(uint8_t *fb, const cs_overlay_t *overlays, size_t
                                   ov->r, ov->g, ov->b);
         }
     }
+    if (has_clock_time && has_local_active_alarm()) {
+        draw_mini_alarm_bell(fb, 58, has_clock_date ? 18 : 24);
+    }
 }
 
 #define ALERT_HOLD_FRAMES_MAX (2U)
@@ -726,27 +1031,57 @@ static void play_alert_animation(cs_alert_t *alert, uint8_t *work_fb)
         return;
     }
 
+    bool is_alarm = (strcmp(alert->event_type, "alarm") == 0);
+    bool loop_alarm = is_alarm || alert->audio_repeat;
+    uint32_t max_dur_s = (alert->audio_max_duration_s >= 15U && alert->audio_max_duration_s <= 900U)
+                             ? alert->audio_max_duration_s
+                             : 120U;
+    uint32_t fallback_repeat_ms =
+        (alert->audio_repeat_interval_ms >= 1500U)
+            ? alert->audio_repeat_interval_ms
+            : settings_store_alarm_repeat_interval_ms(alert->audio_folder, alert->audio_track);
+
     s_alert_playing = true;
+    s_alarm_ringing = is_alarm;
     s_dismiss_alert = false;
     peripherals_set_fast_click(true);
 
-    ESP_LOGI(TAG, "Starting alert animation: event=%s frames=%u dur=%ums strip=%uB zlib=%s marquee=\"%s\" free_heap=%lu",
+    ESP_LOGI(TAG, "Starting alert animation: event=%s frames=%u dur=%ums strip=%uB zlib=%s repeat=%s max=%us marquee=\"%s\" free_heap=%lu",
              alert->event_type[0] ? alert->event_type : "alert",
              (unsigned)alert->frame_count,
              (unsigned)alert->frame_duration_ms,
              (unsigned)alert->strip_data_len,
              alert->strip_is_zlib ? "yes" : "no",
+             loop_alarm ? "yes" : "no",
+             (unsigned)(loop_alarm ? max_dur_s : 0U),
              alert->marquee_text,
              (unsigned long)esp_get_free_heap_size());
 
+    bool audio_active = false;
+    uint8_t saved_local_vol = 0;
+    bool volume_overridden = false;
+    int64_t alarm_start_us = esp_timer_get_time();
+    int64_t last_play_us = alarm_start_us;
+    int64_t replay_at_us = 0;
+    bool seen_df_finish = false;
+
 #if CONFIG_CS_ENABLE_DFPLAYER
-    if (alert->has_audio && !is_quiet_now()) {
+    if (alert->has_audio && (is_alarm || !is_quiet_now())) {
         cs_local_settings_t local;
         settings_store_get(&local);
-        if (local.df_volume > 0) {
-            dfplayer_set_volume(local.df_volume);
+        saved_local_vol = local.df_volume;
+        uint8_t vol = local.df_volume;
+        if (is_alarm && alert->audio_volume > 0U) {
+            vol = (alert->audio_volume > 30U) ? 30U : alert->audio_volume;
+            volume_overridden = (vol != saved_local_vol);
+        }
+        if (vol > 0U) {
+            dfplayer_flush_rx();
+            dfplayer_set_volume(vol);
             vTaskDelay(pdMS_TO_TICKS(30));
             dfplayer_play_folder_track(alert->audio_folder, alert->audio_track);
+            audio_active = true;
+            last_play_us = esp_timer_get_time();
         }
     }
 #endif
@@ -763,7 +1098,14 @@ static void play_alert_animation(cs_alert_t *alert, uint8_t *work_fb)
         api_client_strip_stream_end(stream);
         free(scratch565);
         api_client_free_alert(alert);
+        s_alarm_ringing = false;
         s_alert_playing = false;
+        if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            update_fast_click_locked();
+            xSemaphoreGive(s_state_mutex);
+        } else {
+            peripherals_set_fast_click(false);
+        }
         return;
     }
 
@@ -783,61 +1125,122 @@ static void play_alert_animation(cs_alert_t *alert, uint8_t *work_fb)
     uint32_t step_ms = (alert->frame_duration_ms >= 25U) ? alert->frame_duration_ms : 125U;
 
     uint32_t played_steps = 0;
-    for (uint32_t step = 0; step < total_steps && !s_dismiss_alert; step++) {
-        bool have_frame = false;
+    uint32_t replay_count = 0;
+    const int64_t max_dur_us = (int64_t)max_dur_s * 1000000LL;
+    const int64_t fallback_repeat_us = (int64_t)fallback_repeat_ms * 1000LL;
 
-        if (step < alert->frame_count && stream != NULL) {
-            if (api_client_strip_stream_next(stream, scratch565)) {
-                have_frame = true;
-                if (step >= hold_start) {
-                    uint16_t slot = (uint16_t)(step - hold_start);
-                    hold_frames[slot] = psram_prefer_malloc(CS_FRAME_RGB565_BYTES);
-                    if (hold_frames[slot]) {
-                        memcpy(hold_frames[slot], scratch565, CS_FRAME_RGB565_BYTES);
-                        held_valid = (uint16_t)(slot + 1U);
+    do {
+        if (!stream && alert->strip_data) {
+            stream = api_client_strip_stream_begin(alert);
+            if (!stream) {
+                break;
+            }
+        }
+        for (uint32_t step = 0; step < total_steps && !s_dismiss_alert; step++) {
+            int64_t now_us = esp_timer_get_time();
+            if (loop_alarm && (now_us - alarm_start_us) >= max_dur_us) {
+                break;
+            }
+
+#if CONFIG_CS_ENABLE_DFPLAYER
+            if (loop_alarm && audio_active) {
+                if (dfplayer_poll_track_finished()) {
+                    if (replay_at_us == 0 && (now_us - last_play_us) >= 700000LL) {
+                        seen_df_finish = true;
+                        replay_at_us = now_us + 300000LL;
                     }
                 }
+                int64_t effective_fallback_us = seen_df_finish
+                                                    ? (fallback_repeat_us + 1500000LL)
+                                                    : fallback_repeat_us;
+                if (replay_at_us > 0 && now_us >= replay_at_us) {
+                    dfplayer_flush_rx();
+                    dfplayer_play_folder_track(alert->audio_folder, alert->audio_track);
+                    last_play_us = now_us;
+                    replay_at_us = 0;
+                    replay_count++;
+                } else if (replay_at_us == 0 &&
+                           (now_us - last_play_us) >= effective_fallback_us) {
+                    dfplayer_flush_rx();
+                    dfplayer_play_folder_track(alert->audio_folder, alert->audio_track);
+                    last_play_us = now_us;
+                    replay_count++;
+                }
             }
-            if (step + 1U >= alert->frame_count || !have_frame) {
-                api_client_strip_stream_end(stream);
-                stream = NULL;
-                free(alert->strip_data);
-                alert->strip_data = NULL;
-                alert->strip_data_len = 0;
+#endif
+
+            bool have_frame = false;
+
+            if (step < alert->frame_count && stream != NULL) {
+                if (api_client_strip_stream_next(stream, scratch565)) {
+                    have_frame = true;
+                    if (step >= hold_start) {
+                        uint16_t slot = (uint16_t)(step - hold_start);
+                        if (!hold_frames[slot]) {
+                            hold_frames[slot] = psram_prefer_malloc(CS_FRAME_RGB565_BYTES);
+                        }
+                        if (hold_frames[slot]) {
+                            memcpy(hold_frames[slot], scratch565, CS_FRAME_RGB565_BYTES);
+                            if ((uint16_t)(slot + 1U) > held_valid) {
+                                held_valid = (uint16_t)(slot + 1U);
+                            }
+                        }
+                    }
+                }
+                if (step + 1U >= alert->frame_count || !have_frame) {
+                    api_client_strip_stream_end(stream);
+                    stream = NULL;
+                    if (!loop_alarm) {
+                        free(alert->strip_data);
+                        alert->strip_data = NULL;
+                        alert->strip_data_len = 0;
+                    }
+                }
+            } else if (held_valid > 0U) {
+                uint16_t slot = (uint16_t)((step - alert->frame_count) % held_valid);
+                if (hold_frames[slot]) {
+                    memcpy(scratch565, hold_frames[slot], CS_FRAME_RGB565_BYTES);
+                    have_frame = true;
+                }
             }
-        } else if (held_valid > 0U) {
-            uint16_t slot = (uint16_t)((step - alert->frame_count) % held_valid);
-            if (hold_frames[slot]) {
-                memcpy(scratch565, hold_frames[slot], CS_FRAME_RGB565_BYTES);
-                have_frame = true;
+
+            if (!have_frame) {
+                break;
             }
+
+            played_steps++;
+            gfx_rgb565be_to_rgb888(scratch565, CS_FRAME_PIXELS, work_fb);
+
+            if (alert->marquee_text[0]) {
+                gfx_fill_rect(work_fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                              0, 25, CS_FRAME_WIDTH, 7, 0, 0, 0);
+                int mx = CS_FRAME_WIDTH - (int)(step * 2U);
+                gfx_draw_text_aligned(work_fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                                      mx, alert->marquee_y, alert->marquee_text,
+                                      GFX_FONT_3X5, GFX_ALIGN_LEFT,
+                                      alert->marquee_r, alert->marquee_g, alert->marquee_b);
+            }
+
+            hub75_present_rgb888(work_fb);
+            vTaskDelay(pdMS_TO_TICKS(step_ms));
         }
+    } while (loop_alarm && !s_dismiss_alert &&
+             (esp_timer_get_time() - alarm_start_us) < max_dur_us);
 
-        if (!have_frame) {
-            break;
+#if CONFIG_CS_ENABLE_DFPLAYER
+    if (loop_alarm && audio_active) {
+        dfplayer_stop();
+        if (volume_overridden) {
+            vTaskDelay(pdMS_TO_TICKS(30));
+            dfplayer_set_volume(saved_local_vol);
         }
-
-        played_steps++;
-        gfx_rgb565be_to_rgb888(scratch565, CS_FRAME_PIXELS, work_fb);
-
-        if (alert->marquee_text[0]) {
-            gfx_fill_rect(work_fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
-                          0, 25, CS_FRAME_WIDTH, 7, 0, 0, 0);
-            int mx = CS_FRAME_WIDTH - (int)(step * 2U);
-            gfx_draw_text_aligned(work_fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
-                                  mx, alert->marquee_y, alert->marquee_text,
-                                  GFX_FONT_3X5, GFX_ALIGN_LEFT,
-                                  alert->marquee_r, alert->marquee_g, alert->marquee_b);
-        }
-
-        hub75_present_rgb888(work_fb);
-        vTaskDelay(pdMS_TO_TICKS(step_ms));
     }
+#endif
 
-    ESP_LOGI(TAG, "Finished alert animation: event=%s steps=%lu/%lu dismissed=%s free_heap=%lu",
+    ESP_LOGI(TAG, "Finished alert animation: event=%s steps=%lu replays=%lu dismissed=%s free_heap=%lu",
              alert->event_type[0] ? alert->event_type : "alert",
              (unsigned long)played_steps,
-             (unsigned long)total_steps,
+             (unsigned long)replay_count,
              s_dismiss_alert ? "yes" : "no",
              (unsigned long)esp_get_free_heap_size());
 
@@ -848,6 +1251,310 @@ static void play_alert_animation(cs_alert_t *alert, uint8_t *work_fb)
     }
     api_client_free_alert(alert);
     s_dismiss_alert = false;
+    s_alarm_ringing = false;
+    s_alert_playing = false;
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        update_fast_click_locked();
+        xSemaphoreGive(s_state_mutex);
+    } else {
+        peripherals_set_fast_click(false);
+    }
+}
+
+static void draw_local_bell_icon(uint8_t *fb, int x0, int y0,
+                                 uint8_t br, uint8_t bg, uint8_t bb,
+                                 uint8_t rr, uint8_t rg, uint8_t rb,
+                                 bool show_rays)
+{
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, x0 + 3, y0, 1, 1, rr, rg, rb);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, x0 + 2, y0 + 1, 3, 1, br, bg, bb);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, x0 + 1, y0 + 2, 5, 3, br, bg, bb);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, x0, y0 + 5, 7, 1, br, bg, bb);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, x0 + 3, y0 + 6, 1, 1, 255, 245, 190);
+    if (show_rays) {
+        gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, x0 - 1, y0 + 1, 1, 2, rr, rg, rb);
+        gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, x0 + 7, y0 + 1, 1, 2, rr, rg, rb);
+    }
+}
+
+static void draw_local_alarm_frame(uint8_t *fb,
+                                   const cs_alarm_item_t *item,
+                                   bool use_24h,
+                                   uint32_t frame_idx)
+{
+    /* Match AlarmApp 4 themes: 0=sunrise, 1=digital_pulse, 2=siren_strobe, 3=gentle_chime */
+    uint8_t bgr = 24, bgg = 11, bgb = 4;
+    uint8_t pr = 255, pg = 205, pb = 45;
+    uint8_t rr = 255, rg = 140, rb = 45;
+
+    if (item->theme_id == 1U) {
+        bgr = 6; bgg = 8; bgb = 22;
+        pr = 56; pg = 225; pb = 255;
+        rr = 255; rg = 65; rb = 85;
+    } else if (item->theme_id == 2U) {
+        bool swap = ((frame_idx / 2U) & 1U) != 0U;
+        bgr = swap ? 4 : 26; bgg = 4; bgb = swap ? 26 : 8;
+        pr = swap ? 75 : 255; pg = swap ? 165 : 75; pb = swap ? 255 : 75;
+        rr = swap ? 255 : 75; rg = swap ? 75 : 165; rb = swap ? 75 : 255;
+    } else if (item->theme_id == 3U) {
+        bgr = 6; bgg = 14; bgb = 30;
+        pr = 120; pg = 210; pb = 255;
+        rr = 210; rg = 240; rb = 255;
+    }
+
+    bool pulse = ((frame_idx / 3U) & 1U) != 0U;
+    int wobble = ((frame_idx % 4U) == 0U) ? -1 : (((frame_idx % 4U) == 2U) ? 1 : 0);
+
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, 0, 0, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, bgr, bgg, bgb);
+
+    /* Pulsing top & divider accent bars */
+    uint8_t ar = pulse ? pr : rr;
+    uint8_t ag = pulse ? pg : rg;
+    uint8_t ab = pulse ? pb : rb;
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, 0, 0, CS_FRAME_WIDTH, 1, ar, ag, ab);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, 0, 20, CS_FRAME_WIDTH, 1, ar, ag, ab);
+
+    /* Animated oscillating bells on left & right */
+    draw_local_bell_icon(fb, 2 + wobble, 6, pr, pg, pb, rr, rg, rb, pulse);
+    draw_local_bell_icon(fb, 55 - wobble, 6, pr, pg, pb, rr, rg, rb, pulse);
+
+    /* Header + alarm label */
+    gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                          32, 3, "ALARM!", GFX_FONT_3X5, GFX_ALIGN_CENTER,
+                          pulse ? 255 : rr, pulse ? 255 : rg, pulse ? 255 : rb);
+
+    char short_lbl[12] = {0};
+    snprintf(short_lbl, sizeof(short_lbl), "%.11s", item->label[0] ? item->label : "WAKE UP!");
+    gfx_font_id_t lbl_font = (strlen(short_lbl) <= 8U) ? GFX_FONT_4X6 : GFX_FONT_3X5;
+    gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                          32, (lbl_font == GFX_FONT_4X6) ? 11 : 12,
+                          short_lbl, lbl_font, GFX_ALIGN_CENTER, 255, 255, 255);
+
+    /* Live current time strip along bottom */
+    char time_txt[16] = {0};
+    sntp_time_format_clock(use_24h ? "%H:%M" : "%I:%M %p", time_txt, sizeof(time_txt));
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, 0, 22, CS_FRAME_WIDTH, 10, 4, 6, 12);
+    gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                          32, 24, time_txt, GFX_FONT_3X5, GFX_ALIGN_CENTER, 248, 250, 252);
+}
+
+static bool alarm_occ_already_fired(const char *alarm_id, uint32_t occ_key)
+{
+    if (!alarm_id || !alarm_id[0]) {
+        return false;
+    }
+    size_t cap = sizeof(s_last_alarm_occ) / sizeof(s_last_alarm_occ[0]);
+    for (size_t i = 0; i < cap; i++) {
+        if (s_last_alarm_occ[i].occ_key == occ_key &&
+            strcmp(s_last_alarm_occ[i].id, alarm_id) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void alarm_occ_mark_fired(const char *alarm_id, uint32_t occ_key)
+{
+    if (!alarm_id || !alarm_id[0]) {
+        return;
+    }
+    size_t cap = sizeof(s_last_alarm_occ) / sizeof(s_last_alarm_occ[0]);
+    for (size_t i = 0; i < cap; i++) {
+        if (strcmp(s_last_alarm_occ[i].id, alarm_id) == 0) {
+            s_last_alarm_occ[i].occ_key = occ_key;
+            return;
+        }
+    }
+    size_t slot = s_last_alarm_occ_next % cap;
+    s_last_alarm_occ_next++;
+    snprintf(s_last_alarm_occ[slot].id, sizeof(s_last_alarm_occ[slot].id), "%s", alarm_id);
+    s_last_alarm_occ[slot].occ_key = occ_key;
+}
+
+static bool check_local_alarm_due(cs_alarm_item_t *out_item, cs_alarm_schedule_t *out_sched)
+{
+    if (!sntp_time_is_synced()) {
+        return false;
+    }
+
+    cs_alarm_schedule_t sched;
+    settings_store_get_alarms(&sched);
+    if (!sched.app_enabled || sched.count == 0U) {
+        return false;
+    }
+    if (!sched.allow_during_quiet_hours && is_quiet_now()) {
+        return false;
+    }
+
+    time_t now_t = 0;
+    time(&now_t);
+    struct tm tm_now;
+    localtime_r(&now_t, &tm_now);
+
+    /* Trigger right at :00 (or within first 10s of the minute if SNTP just synced) */
+    if (tm_now.tm_sec > 10) {
+        return false;
+    }
+
+    uint32_t occ_key = ((uint32_t)(tm_now.tm_year + 1900) * 10000U +
+                        (uint32_t)(tm_now.tm_mon + 1) * 100U +
+                        (uint32_t)tm_now.tm_mday) * 1440U +
+                       (uint32_t)(tm_now.tm_hour * 60 + tm_now.tm_min);
+    uint8_t wday_bit = (uint8_t)(1U << (tm_now.tm_wday & 7));
+
+    for (uint8_t i = 0; i < sched.count && i < CS_MAX_LOCAL_ALARMS; i++) {
+        const cs_alarm_item_t *it = &sched.items[i];
+        if (!it->enabled) {
+            continue;
+        }
+        if (it->hour != (uint8_t)tm_now.tm_hour || it->minute != (uint8_t)tm_now.tm_min) {
+            continue;
+        }
+        if (it->repeat && (it->days_mask & wday_bit) == 0U) {
+            continue;
+        }
+        char dedup_id[25];
+        if (it->id[0]) {
+            snprintf(dedup_id, sizeof(dedup_id), "%s", it->id);
+        } else {
+            snprintf(dedup_id, sizeof(dedup_id), "idx_%u_%02u%02u",
+                     (unsigned)i, (unsigned)it->hour, (unsigned)it->minute);
+        }
+        if (alarm_occ_already_fired(dedup_id, occ_key)) {
+            continue;
+        }
+        alarm_occ_mark_fired(dedup_id, occ_key);
+        if (out_item) {
+            *out_item = *it;
+        }
+        if (out_sched) {
+            *out_sched = sched;
+        }
+        return true;
+    }
+    return false;
+}
+
+static void play_local_alarm(const cs_alarm_item_t *item,
+                             const cs_alarm_schedule_t *sched,
+                             uint8_t *work_fb)
+{
+    if (!item || !sched || !work_fb) {
+        return;
+    }
+
+    uint32_t max_dur_s = (uint32_t)((sched->duration_minutes >= 1U && sched->duration_minutes <= 15U)
+                                        ? sched->duration_minutes
+                                        : 2U) * 60U;
+    uint32_t fallback_repeat_ms = settings_store_alarm_repeat_interval_ms(item->folder, item->track);
+
+    s_alert_playing = true;
+    s_alarm_ringing = true;
+    s_dismiss_alert = false;
+    s_suppress_server_alarm_until_us = esp_timer_get_time() + (int64_t)(max_dur_s + 60U) * 1000000LL;
+    peripherals_set_fast_click(true);
+
+    ESP_LOGI(TAG, "Local zero-delay alarm triggered: %02u:%02u label=\"%s\" sound=%u:%u repeat_ms=%lu dur=%us vol=%u",
+             (unsigned)item->hour, (unsigned)item->minute,
+             item->label, (unsigned)item->folder, (unsigned)item->track,
+             (unsigned long)fallback_repeat_ms,
+             (unsigned)max_dur_s, (unsigned)sched->volume);
+
+    bool audio_active = false;
+    uint8_t saved_local_vol = 0;
+    bool volume_overridden = false;
+    int64_t alarm_start_us = esp_timer_get_time();
+    int64_t last_play_us = alarm_start_us;
+    int64_t replay_at_us = 0;
+    bool seen_df_finish = false;
+
+#if CONFIG_CS_ENABLE_DFPLAYER
+    {
+        cs_local_settings_t local;
+        settings_store_get(&local);
+        saved_local_vol = local.df_volume;
+        uint8_t vol = (sched->volume > 0U)
+                          ? ((sched->volume > 30U) ? 30U : sched->volume)
+                          : local.df_volume;
+        volume_overridden = (vol != saved_local_vol);
+        if (vol > 0U && item->folder > 0U && item->track > 0U) {
+            dfplayer_flush_rx();
+            dfplayer_set_volume(vol);
+            vTaskDelay(pdMS_TO_TICKS(30));
+            dfplayer_play_folder_track(item->folder, item->track);
+            audio_active = true;
+            last_play_us = esp_timer_get_time();
+        }
+    }
+#endif
+
+    const int64_t max_dur_us = (int64_t)max_dur_s * 1000000LL;
+    const int64_t fallback_repeat_us = (int64_t)fallback_repeat_ms * 1000LL;
+    uint32_t frame_idx = 0;
+    uint32_t replay_count = 0;
+
+    while (!s_dismiss_alert) {
+        int64_t now_us = esp_timer_get_time();
+        if ((now_us - alarm_start_us) >= max_dur_us) {
+            break;
+        }
+
+#if CONFIG_CS_ENABLE_DFPLAYER
+        if (audio_active) {
+            if (dfplayer_poll_track_finished()) {
+                if (replay_at_us == 0 && (now_us - last_play_us) >= 700000LL) {
+                    seen_df_finish = true;
+                    replay_at_us = now_us + 300000LL;
+                }
+            }
+            int64_t effective_fallback_us = seen_df_finish
+                                                ? (fallback_repeat_us + 1500000LL)
+                                                : fallback_repeat_us;
+            if (replay_at_us > 0 && now_us >= replay_at_us) {
+                dfplayer_flush_rx();
+                dfplayer_play_folder_track(item->folder, item->track);
+                last_play_us = now_us;
+                replay_at_us = 0;
+                replay_count++;
+            } else if (replay_at_us == 0 &&
+                       (now_us - last_play_us) >= effective_fallback_us) {
+                dfplayer_flush_rx();
+                dfplayer_play_folder_track(item->folder, item->track);
+                last_play_us = now_us;
+                replay_count++;
+            }
+        }
+#endif
+
+        draw_local_alarm_frame(work_fb, item, sched->use_24h, frame_idx++);
+        hub75_present_rgb888(work_fb);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+#if CONFIG_CS_ENABLE_DFPLAYER
+    if (audio_active) {
+        dfplayer_stop();
+        if (volume_overridden) {
+            vTaskDelay(pdMS_TO_TICKS(30));
+            dfplayer_set_volume(saved_local_vol);
+        }
+    }
+#endif
+
+    ESP_LOGI(TAG, "Local alarm finished: label=\"%s\" repeat=%s frames=%lu replays=%lu dismissed=%s",
+             item->label, item->repeat ? "yes" : "no",
+             (unsigned long)frame_idx, (unsigned long)replay_count,
+             s_dismiss_alert ? "yes" : "no");
+
+    if (!item->repeat && item->id[0]) {
+        settings_store_consume_onetime_alarm(item->id);
+        if (s_api_task) {
+            xTaskNotifyGive(s_api_task);
+        }
+    }
+
+    s_dismiss_alert = false;
+    s_alarm_ringing = false;
     s_alert_playing = false;
     if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         update_fast_click_locked();
@@ -1033,10 +1740,27 @@ static void render_task(void *arg)
             xSemaphoreGive(s_state_mutex);
         }
 
+        /* Check local SNTP alarms every 100ms for exact :00 zero-delay triggering */
+        {
+            cs_alarm_item_t due_item;
+            cs_alarm_schedule_t due_sched;
+            if (check_local_alarm_due(&due_item, &due_sched)) {
+                api_client_free_alert(&alert);
+                play_local_alarm(&due_item, &due_sched, work_fb);
+                last_valid = false;
+                continue;
+            }
+        }
+
         if (alert.valid) {
-            play_alert_animation(&alert, work_fb);
-            last_valid = false;
-            continue;
+            if (strcmp(alert.event_type, "alarm") == 0 &&
+                esp_timer_get_time() < s_suppress_server_alarm_until_us) {
+                api_client_free_alert(&alert);
+            } else {
+                play_alert_animation(&alert, work_fb);
+                last_valid = false;
+                continue;
+            }
         }
 
         if (menu_page != MENU_NONE) {
@@ -1284,25 +2008,7 @@ static void input_task(void *arg)
                     }
                 } else {
                     if (ev.type == CS_INPUT_ENC_CW || ev.type == CS_INPUT_ENC_CCW) {
-                        int n = (int)s_shared.cfg.enabled_app_count;
-                        if (n > 0) {
-                            int span = n + 1;
-                            int pos = s_shared.selected_app_idx + 1;
-                            pos = ((pos + step) % span + span) % span;
-                            s_shared.selected_app_idx = pos - 1;
-                            s_shared.last_rotary_us = esp_timer_get_time();
-                            if (s_shared.selected_app_idx >= 0) {
-                                s_shared.rotary_override_active = true;
-                            } else {
-                                s_shared.rotary_override_active = false;
-                            }
-                            const char *sel = (s_shared.selected_app_idx < 0)
-                                                  ? NULL
-                                                  : s_shared.cfg.enabled_apps[s_shared.selected_app_idx];
-                            bool hit = cache_apply_app_locked(sel);
-                            ESP_LOGI(TAG, "Rotary app mode -> %s (idx=%d, cached=%s)",
-                                     sel ? sel : "auto", s_shared.selected_app_idx,
-                                     hit ? "yes" : "no");
+                        if (step_rotary_app_locked(step)) {
                             wake_render = true;
                             wake_api = true;
                         }
@@ -1323,15 +2029,17 @@ static void input_task(void *arg)
             }
 
             if (!in_menu) {
-                if (ev.type == CS_INPUT_BTN_SHORT) {
-                    if (s_alert_playing) {
-                        s_dismiss_alert = true;
+                if (s_alert_playing &&
+                    (ev.type == CS_INPUT_BTN_SHORT ||
+                     ev.type == CS_INPUT_BTN_DOUBLE ||
+                     ev.type == CS_INPUT_BTN_TRIPLE)) {
+                    s_dismiss_alert = true;
 #if CONFIG_CS_ENABLE_DFPLAYER
-                        dfplayer_stop();
+                    dfplayer_stop();
 #endif
-                    } else {
-                        play_manual_song(0);
-                    }
+                    ESP_LOGI(TAG, "Alert dismissed via button press");
+                } else if (ev.type == CS_INPUT_BTN_SHORT) {
+                    play_manual_song(0);
                 } else if (ev.type == CS_INPUT_BTN_DOUBLE) {
                     play_manual_song(1);
                 } else if (ev.type == CS_INPUT_BTN_TRIPLE) {
@@ -1405,6 +2113,7 @@ static void input_task(void *arg)
                 s_shared.menu_page = MENU_NONE;
                 s_shared.menu_edit = false;
                 s_shared.selected_app_idx = -1;
+                s_shared.manual_pinned_slot[0] = '\0';
                 s_shared.rotary_override_active = false;
                 cache_apply_app_locked(NULL);
                 update_fast_click_locked();
@@ -1413,6 +2122,7 @@ static void input_task(void *arg)
                        s_shared.rotary_override_active && s_shared.selected_app_idx >= 0 &&
                        (now_us - s_shared.last_rotary_us) >= (int64_t)rotary_idle_sec * 1000000LL) {
                 s_shared.selected_app_idx = -1;
+                s_shared.manual_pinned_slot[0] = '\0';
                 s_shared.rotary_override_active = false;
                 cache_apply_app_locked(NULL);
                 return_auto = true;
@@ -1565,6 +2275,20 @@ static void api_task(void *arg)
             }
         }
 
+        /* Sync any locally auto-deleted one-time alarms back to the cloud server */
+        {
+            cs_alarm_schedule_t pending_alarms;
+            settings_store_get_alarms(&pending_alarms);
+            if (pending_alarms.pending_delete_count > 0U) {
+                for (uint8_t i = 0; i < pending_alarms.pending_delete_count && i < CS_MAX_LOCAL_ALARMS; i++) {
+                    if (pending_alarms.pending_delete_ids[i][0] &&
+                        api_client_delete_alarm(pending_alarms.pending_delete_ids[i]) == ESP_OK) {
+                        settings_store_clear_pending_alarm_delete(pending_alarms.pending_delete_ids[i]);
+                    }
+                }
+            }
+        }
+
         if (s_force_ota_check ||
             (local.ota_enabled &&
              now_us - last_ota_us >= (int64_t)CONFIG_CS_OTA_CHECK_INTERVAL_SEC * 1000000LL)) {
@@ -1587,9 +2311,25 @@ static void api_task(void *arg)
             }
         }
 
-        if (now_us - last_cfg_us >= (int64_t)CONFIG_CS_API_CONFIG_SYNC_SEC * 1000000LL) {
+        if (s_force_cfg_sync ||
+            now_us - last_cfg_us >= (int64_t)CONFIG_CS_API_CONFIG_SYNC_SEC * 1000000LL) {
+            bool force_apps_sync = s_force_cfg_sync;
+            s_force_cfg_sync = false;
+            static bool s_apps_meta_synced = false;
+            if (!s_apps_meta_synced || force_apps_sync) {
+                if (api_client_sync_apps_metadata() == ESP_OK) {
+                    s_apps_meta_synced = true;
+                }
+            }
             cs_device_config_t new_cfg;
             if (api_client_fetch_config(&new_cfg) == ESP_OK) {
+                bool bday_act = false;
+                bool hol_act = false;
+                if (api_client_fetch_active_events(&bday_act, &hol_act) == ESP_OK) {
+                    new_cfg.active_events_known = true;
+                    new_cfg.active_event_birthdays = bday_act;
+                    new_cfg.active_event_holidays = hol_act;
+                }
                 last_cfg_us = now_us;
                 sntp_time_set_timezone(new_cfg.timezone);
                 settings_store_get(&local);
@@ -1597,18 +2337,33 @@ static void api_task(void *arg)
                 new_cfg.brightness_override = local.brightness_override;
 
                 if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                    if (new_cfg.enabled_app_count == 0) {
+                    if (!new_cfg.enabled_apps_present) {
+                        new_cfg.enabled_apps_present = s_shared.cfg.enabled_apps_present;
                         new_cfg.enabled_app_count = s_shared.cfg.enabled_app_count;
                         memcpy(new_cfg.enabled_apps, s_shared.cfg.enabled_apps,
                                sizeof(new_cfg.enabled_apps));
                     }
+                    if (!new_cfg.active_events_known && s_shared.cfg.active_events_known) {
+                        new_cfg.active_events_known = s_shared.cfg.active_events_known;
+                        new_cfg.active_event_birthdays = s_shared.cfg.active_event_birthdays;
+                        new_cfg.active_event_holidays = s_shared.cfg.active_event_holidays;
+                    }
+                    bool apps_changed = (s_shared.cfg.enabled_app_count != new_cfg.enabled_app_count);
+                    if (!apps_changed) {
+                        for (size_t i = 0; i < new_cfg.enabled_app_count; i++) {
+                            if (strcmp(s_shared.cfg.enabled_apps[i], new_cfg.enabled_apps[i]) != 0) {
+                                apps_changed = true;
+                                break;
+                            }
+                        }
+                    }
                     bool cfg_changed =
+                        apps_changed ||
                         (strcmp(s_shared.cfg.favorite_teams, new_cfg.favorite_teams) != 0) ||
                         (strcmp(s_shared.cfg.timezone, new_cfg.timezone) != 0) ||
                         (s_shared.cfg.quiet_enabled != new_cfg.quiet_enabled) ||
                         (strcmp(s_shared.cfg.quiet_start, new_cfg.quiet_start) != 0) ||
-                        (strcmp(s_shared.cfg.quiet_end, new_cfg.quiet_end) != 0) ||
-                        (s_shared.cfg.enabled_app_count != new_cfg.enabled_app_count);
+                        (strcmp(s_shared.cfg.quiet_end, new_cfg.quiet_end) != 0);
                     if (cfg_changed) {
                         cache_invalidate_all_locked();
                     }
@@ -1617,17 +2372,16 @@ static void api_task(void *arg)
                     s_shared.auto_brightness = (local.brightness_override < 0);
 #endif
                     if (!s_shared.rotary_override_active) {
-                        s_shared.selected_app_idx = -1;
-                        if (local.pinned_app[0] != '\0') {
-                            for (size_t i = 0; i < s_shared.cfg.enabled_app_count; i++) {
-                                if (strcmp(s_shared.cfg.enabled_apps[i], local.pinned_app) == 0) {
-                                    s_shared.selected_app_idx = (int)i;
-                                    break;
-                                }
-                            }
+                        rebuild_rotary_slots_locked(local.pinned_app);
+                        if (local.pinned_app[0] != '\0' && s_shared.selected_app_idx < 0) {
+                            snprintf(s_shared.manual_pinned_slot,
+                                     sizeof(s_shared.manual_pinned_slot),
+                                     "%s", local.pinned_app);
+                        } else {
+                            s_shared.manual_pinned_slot[0] = '\0';
                         }
-                    } else if (s_shared.selected_app_idx >= (int)s_shared.cfg.enabled_app_count) {
-                        s_shared.selected_app_idx = -1;
+                    } else {
+                        rebuild_rotary_slots_locked(NULL);
                     }
                     xSemaphoreGive(s_state_mutex);
                 }
@@ -1635,8 +2389,7 @@ static void api_task(void *arg)
                 /* Keep local NVS aligned if cloud-owned fields changed on server */
                 if (!local.cloud_sync_pending) {
                     bool nvs_changed = false;
-                    if (new_cfg.favorite_teams[0] &&
-                        strcmp(local.favorite_teams, new_cfg.favorite_teams) != 0) {
+                    if (strcmp(local.favorite_teams, new_cfg.favorite_teams) != 0) {
                         snprintf(local.favorite_teams, sizeof(local.favorite_teams),
                                  "%s", new_cfg.favorite_teams);
                         nvs_changed = true;
@@ -1684,13 +2437,28 @@ static void api_task(void *arg)
         }
 
         int req_app_idx = -1;
+        char req_slot_key[64] = {0};
         char app_override[32] = {0};
+        char screen_override[24] = {0};
+        char cached_etag[48] = {0};
+        char etag_lookup_key[64] = {0};
         if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             req_app_idx = s_shared.selected_app_idx;
-            if (req_app_idx >= 0 &&
-                req_app_idx < (int)s_shared.cfg.enabled_app_count) {
-                snprintf(app_override, sizeof(app_override), "%s",
-                         s_shared.cfg.enabled_apps[req_app_idx]);
+            if (s_shared.manual_pinned_slot[0] != '\0') {
+                snprintf(req_slot_key, sizeof(req_slot_key), "%s", s_shared.manual_pinned_slot);
+            } else if (req_app_idx >= 0 &&
+                       req_app_idx < (int)s_shared.rotary_slot_count) {
+                snprintf(req_slot_key, sizeof(req_slot_key), "%s",
+                         s_shared.rotary_slots[req_app_idx].key);
+            }
+            split_slot_key(req_slot_key, app_override, sizeof(app_override),
+                           screen_override, sizeof(screen_override));
+            if (s_shared.has_frame) {
+                const char *lk = req_slot_key[0] ? req_slot_key : s_shared.auto_app_id;
+                if (lk && lk[0]) {
+                    snprintf(etag_lookup_key, sizeof(etag_lookup_key), "%s", lk);
+                    cache_get_etag_locked(lk, cached_etag, sizeof(cached_etag));
+                }
             }
             xSemaphoreGive(s_state_mutex);
         }
@@ -1708,12 +2476,17 @@ static void api_task(void *arg)
         uint32_t wait_sec = base_poll;
         bool stale_selection = false;
         bool fetched_ok = false;
+        bool need_render_wake = false;
 
         if (!resp) {
             ESP_LOGE(TAG, "Out of memory allocating cs_frame_response_t");
             wait_sec = 5;
-        } else if (api_client_fetch_frame(app_override[0] ? app_override : NULL,
-                                          teams_arg, resp) == ESP_OK) {
+        } else if (api_client_fetch_frame_ex(app_override[0] ? app_override : NULL,
+                                             screen_override[0] ? screen_override : NULL,
+                                             teams_arg,
+                                             true,
+                                             cached_etag[0] ? cached_etag : NULL,
+                                             resp) == ESP_OK) {
             fetched_ok = true;
             fail_count = 0;
             hub75_set_status_indicator(HUB75_STATUS_NONE);
@@ -1721,47 +2494,87 @@ static void api_task(void *arg)
                            ? resp->refresh_seconds
                            : base_poll;
 
+            char store_key[64] = {0};
+            if (req_slot_key[0] != '\0') {
+                snprintf(store_key, sizeof(store_key), "%s", req_slot_key);
+            } else if (resp->app_id[0] != '\0') {
+                snprintf(store_key, sizeof(store_key), "%s", resp->app_id);
+            } else if (etag_lookup_key[0] != '\0') {
+                snprintf(store_key, sizeof(store_key), "%s", etag_lookup_key);
+            }
+
             if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                 s_shared.api_fail_count = 0;
-                cache_store_frame_locked(resp->app_id,
-                                         resp->bg_rgb888,
-                                         resp->overlays,
-                                         resp->overlay_count,
-                                         resp->quiet_mode,
-                                         resp->refresh_seconds);
-                if (app_override[0] == '\0' && resp->app_id[0]) {
-                    snprintf(s_shared.auto_app_id, sizeof(s_shared.auto_app_id),
-                             "%s", resp->app_id);
-                }
-
-                if (s_shared.selected_app_idx != req_app_idx) {
-                    stale_selection = true;
-                    api_client_free_alert(&resp->alert);
+                if (resp->not_modified) {
+                    if (store_key[0]) {
+                        cache_touch_slot_locked(store_key, resp->refresh_seconds);
+                    }
+                    const char *cur_slot_key = "";
+                    if (s_shared.manual_pinned_slot[0] != '\0') {
+                        cur_slot_key = s_shared.manual_pinned_slot;
+                    } else if (s_shared.selected_app_idx >= 0 &&
+                               s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
+                        cur_slot_key = s_shared.rotary_slots[s_shared.selected_app_idx].key;
+                    }
+                    if (s_shared.selected_app_idx != req_app_idx ||
+                        strcmp(cur_slot_key, req_slot_key) != 0) {
+                        stale_selection = true;
+                    } else if (s_shared.switching_pending ||
+                               (store_key[0] && strcmp(s_shared.active_app_id, store_key) != 0)) {
+                        cache_apply_app_locked(store_key[0] ? store_key : NULL);
+                        need_render_wake = true;
+                    }
                 } else {
-                    bool app_changed = (strcmp(s_shared.active_app_id, resp->app_id) != 0);
-                    if (s_shared.bg_rgb888) {
-                        memcpy(s_shared.bg_rgb888, resp->bg_rgb888, CS_FRAME_RGB888_BYTES);
+                    cache_store_frame_locked(store_key,
+                                             resp->bg_rgb565be,
+                                             resp->etag,
+                                             resp->overlays,
+                                             resp->overlay_count,
+                                             resp->quiet_mode,
+                                             resp->refresh_seconds);
+                    if (req_slot_key[0] == '\0' && resp->app_id[0]) {
+                        snprintf(s_shared.auto_app_id, sizeof(s_shared.auto_app_id),
+                                 "%s", resp->app_id);
                     }
-                    snprintf(s_shared.active_app_id, sizeof(s_shared.active_app_id),
-                             "%s", resp->app_id);
-                    s_shared.overlay_count = resp->overlay_count;
-                    if (resp->overlay_count > 0) {
-                        memcpy(s_shared.overlays, resp->overlays,
-                               resp->overlay_count * sizeof(cs_overlay_t));
-                    }
-                    s_shared.last_quiet_mode = resp->quiet_mode;
-                    s_shared.has_frame = true;
-                    s_shared.switching_pending = false;
-                    s_shared.switching_label[0] = '\0';
 
-                    if (resp->alert.valid) {
-                        api_client_free_alert(&s_shared.pending_alert);
-                        s_shared.pending_alert = resp->alert;
-                        memset(&resp->alert, 0, sizeof(resp->alert));
+                    const char *cur_slot_key = "";
+                    if (s_shared.manual_pinned_slot[0] != '\0') {
+                        cur_slot_key = s_shared.manual_pinned_slot;
+                    } else if (s_shared.selected_app_idx >= 0 &&
+                               s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
+                        cur_slot_key = s_shared.rotary_slots[s_shared.selected_app_idx].key;
                     }
-                    if (app_changed || app_override[0]) {
-                        ESP_LOGI(TAG, "Frame active: app=%s (req=%s)",
-                                 resp->app_id, app_override[0] ? app_override : "auto");
+                    if (s_shared.selected_app_idx != req_app_idx ||
+                        strcmp(cur_slot_key, req_slot_key) != 0) {
+                        stale_selection = true;
+                        api_client_free_alert(&resp->alert);
+                    } else {
+                        bool app_changed = (strcmp(s_shared.active_app_id, store_key) != 0);
+                        if (s_shared.bg_rgb888) {
+                            memcpy(s_shared.bg_rgb888, resp->bg_rgb888, CS_FRAME_RGB888_BYTES);
+                        }
+                        snprintf(s_shared.active_app_id, sizeof(s_shared.active_app_id),
+                                 "%s", store_key);
+                        s_shared.overlay_count = resp->overlay_count;
+                        if (resp->overlay_count > 0) {
+                            memcpy(s_shared.overlays, resp->overlays,
+                                   resp->overlay_count * sizeof(cs_overlay_t));
+                        }
+                        s_shared.last_quiet_mode = resp->quiet_mode;
+                        s_shared.has_frame = true;
+                        s_shared.switching_pending = false;
+                        s_shared.switching_label[0] = '\0';
+                        need_render_wake = true;
+
+                        if (resp->alert.valid) {
+                            api_client_free_alert(&s_shared.pending_alert);
+                            s_shared.pending_alert = resp->alert;
+                            memset(&resp->alert, 0, sizeof(resp->alert));
+                        }
+                        if (app_changed || req_slot_key[0]) {
+                            ESP_LOGI(TAG, "Frame active: slot=%s (resp=%s)",
+                                     store_key, resp->app_id);
+                        }
                     }
                 }
                 xSemaphoreGive(s_state_mutex);
@@ -1780,7 +2593,7 @@ static void api_task(void *arg)
             free(resp);
             resp = NULL;
 
-            if (!stale_selection && s_render_task) {
+            if (!stale_selection && need_render_wake && s_render_task) {
                 xTaskNotifyGive(s_render_task);
             }
         } else {
@@ -1819,36 +2632,56 @@ static void api_task(void *arg)
             continue;
         }
 
-        /* Background-warm / refresh one uncached or TTL-expired app per idle poll so every screen stays fresh */
-        if (fetched_ok && req_app_idx < 0) {
-            char warm_app[32] = {0};
+        /* Background-warm / refresh one uncached or TTL-expired slot per idle poll so every screen stays fresh */
+        if (fetched_ok && req_slot_key[0] == '\0') {
+            char warm_slot[64] = {0};
             if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                if (s_shared.selected_app_idx < 0) {
-                    cache_pick_bg_refresh_app_locked(esp_timer_get_time(), warm_app, sizeof(warm_app));
+                if (s_shared.selected_app_idx < 0 && s_shared.manual_pinned_slot[0] == '\0') {
+                    cache_pick_bg_refresh_app_locked(esp_timer_get_time(), warm_slot, sizeof(warm_slot));
                 }
                 xSemaphoreGive(s_state_mutex);
             }
-            if (warm_app[0]) {
+            if (warm_slot[0]) {
+                char warm_app[32] = {0};
+                char warm_screen[24] = {0};
+                char warm_etag[48] = {0};
+                split_slot_key(warm_slot, warm_app, sizeof(warm_app),
+                               warm_screen, sizeof(warm_screen));
+                if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    cache_get_etag_locked(warm_slot, warm_etag, sizeof(warm_etag));
+                    xSemaphoreGive(s_state_mutex);
+                }
                 cs_frame_response_t *wresp = psram_prefer_calloc(1, sizeof(cs_frame_response_t));
                 if (wresp) {
-                    if (api_client_fetch_frame(warm_app, teams_arg, wresp) == ESP_OK) {
+                    if (api_client_fetch_frame_ex(warm_app,
+                                                  warm_screen[0] ? warm_screen : NULL,
+                                                  teams_arg, false,
+                                                  warm_etag[0] ? warm_etag : NULL,
+                                                  wresp) == ESP_OK) {
                         if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                            cache_store_frame_locked(wresp->app_id,
-                                                     wresp->bg_rgb888,
-                                                     wresp->overlays,
-                                                     wresp->overlay_count,
-                                                     wresp->quiet_mode,
-                                                     wresp->refresh_seconds);
+                            if (wresp->not_modified) {
+                                cache_touch_slot_locked(warm_slot, wresp->refresh_seconds);
+                            } else {
+                                cache_store_frame_locked(warm_slot,
+                                                         wresp->bg_rgb565be,
+                                                         wresp->etag,
+                                                         wresp->overlays,
+                                                         wresp->overlay_count,
+                                                         wresp->quiet_mode,
+                                                         wresp->refresh_seconds);
+                            }
                             xSemaphoreGive(s_state_mutex);
                         }
-                        ESP_LOGD(TAG, "Refreshed cached app frame: %s", warm_app);
+                        ESP_LOGD(TAG, "Refreshed cached slot frame: %s (%s)",
+                                 warm_slot, wresp->not_modified ? "304" : "200");
                     }
                     api_client_free_alert(&wresp->alert);
                     free(wresp);
                 }
                 bool knob_moved = false;
                 if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-                    knob_moved = (s_shared.selected_app_idx >= 0);
+                    knob_moved = (s_shared.selected_app_idx >= 0 ||
+                                  s_shared.manual_pinned_slot[0] != '\0');
                     xSemaphoreGive(s_state_mutex);
                 }
                 if (knob_moved) {
@@ -1878,7 +2711,7 @@ void app_main(void)
 
     s_shared.bg_rgb888 = psram_prefer_calloc(1, CS_FRAME_RGB888_BYTES);
     configASSERT(s_shared.bg_rgb888 != NULL);
-    s_frame_cache = psram_prefer_calloc(CS_MAX_APPS, sizeof(app_frame_cache_entry_t));
+    s_frame_cache = psram_prefer_calloc(CS_MAX_ROTARY_SLOTS, sizeof(app_frame_cache_entry_t));
 
     init_default_config(&s_shared.cfg);
     s_shared.selected_app_idx = -1;
@@ -1886,13 +2719,10 @@ void app_main(void)
         cs_local_settings_t boot_local;
         settings_store_get(&boot_local);
         s_shared.rotary_idle_sec = boot_local.rotary_idle_sec;
-        if (boot_local.pinned_app[0] != '\0') {
-            for (size_t i = 0; i < s_shared.cfg.enabled_app_count; i++) {
-                if (strcmp(s_shared.cfg.enabled_apps[i], boot_local.pinned_app) == 0) {
-                    s_shared.selected_app_idx = (int)i;
-                    break;
-                }
-            }
+        rebuild_rotary_slots_locked(boot_local.pinned_app);
+        if (boot_local.pinned_app[0] != '\0' && s_shared.selected_app_idx < 0) {
+            snprintf(s_shared.manual_pinned_slot, sizeof(s_shared.manual_pinned_slot),
+                     "%s", boot_local.pinned_app);
         }
     }
 #if CONFIG_CS_ENABLE_LIGHT_SENSOR
@@ -1929,10 +2759,14 @@ void app_main(void)
     const web_portal_hooks_t portal_hooks = {
         .get_display_status = portal_get_status,
         .get_ota_status = portal_get_ota_status,
+        .get_active_events = portal_get_active_events,
+        .is_alarm_ringing = portal_is_alarm_ringing,
         .get_api_fail_count = portal_get_api_fail_count,
         .on_settings_updated = portal_on_settings_updated,
         .on_apply_brightness = portal_on_apply_brightness,
         .on_set_pinned_app = portal_on_set_pinned_app,
+        .on_step_app = portal_on_step_app,
+        .on_apps_metadata_synced = portal_on_apps_metadata_synced,
         .on_request_refresh = portal_on_request_refresh,
         .on_request_ota = portal_on_request_ota,
         .on_audio_action = portal_on_audio_action,
@@ -1943,5 +2777,17 @@ void app_main(void)
 
     xTaskCreatePinnedToCore(render_task, "render_task", 8192, NULL, 5, &s_render_task, 1);
     xTaskCreate(input_task, "input_task", 4096, (void *)input_queue, 6, NULL);
-    xTaskCreate(api_task, "api_task", 12288, NULL, 4, &s_api_task);
+    xTaskCreate(api_task, "api_task", 16384, NULL, 4, &s_api_task);
+
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t ota_state = ESP_OTA_IMG_UNDEFINED;
+    if (running && esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
+        ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_err_t ota_valid_err = esp_ota_mark_app_valid_cancel_rollback();
+        if (ota_valid_err == ESP_OK) {
+            ESP_LOGI(TAG, "OTA image verified after successful boot; rollback canceled");
+        } else {
+            ESP_LOGW(TAG, "Failed to confirm OTA image: %s", esp_err_to_name(ota_valid_err));
+        }
+    }
 }

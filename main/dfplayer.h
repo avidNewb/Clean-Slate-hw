@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -37,6 +38,17 @@ esp_err_t dfplayer_play_folder_track(uint8_t folder, uint8_t track);
  * Stop current playback.
  */
 esp_err_t dfplayer_stop(void);
+
+/**
+ * Flush pending UART RX bytes from DFPlayer before starting a timed/repeating track.
+ */
+void dfplayer_flush_rx(void);
+
+/**
+ * Non-blocking poll of DFPlayer UART RX for a track-finished notification
+ * (0x3C USB / 0x3D SD / 0x3E Flash). Returns true when a finish packet arrived.
+ */
+bool dfplayer_poll_track_finished(void);
 
 #ifdef __cplusplus
 }

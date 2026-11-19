@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 #include "esp_timer.h"
 #include "esp_tls.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "mbedtls/base64.h"
@@ -23,6 +25,7 @@
 
 #include "json_min.h"
 #include "settings_store.h"
+#include "sntp_time.h"
 #include "wifi_manager.h"
 
 static const char *TAG = "api_client";
@@ -33,11 +36,51 @@ static const char *TAG = "api_client";
 
 static RTC_NOINIT_ATTR uint32_t s_ota_reboot_magic;
 static portMUX_TYPE s_diag_mux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_apps_mux = portMUX_INITIALIZER_UNLOCKED;
+static cs_app_screens_t s_app_screens[CS_MAX_APPS];
+static size_t s_app_screens_count = 0;
 static cs_api_last_status_t s_last_status = {
     .stage = "idle",
     .last_ok_age_sec = -1,
 };
 static int64_t s_last_ok_us = 0;
+
+/* RAM JSON caches for /api/v1/apps and /api/v1/device/{id}/config so local web_portal
+ * requests serve instantly without stalling the single-threaded httpd task on cloud TLS. */
+static portMUX_TYPE s_init_mux = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_json_cache_mux = NULL;
+static char *s_cached_apps_json = NULL;
+static size_t s_cached_apps_len = 0;
+static char s_cached_apps_base[192] = {0};
+static char *s_cached_cfg_json = NULL;
+static size_t s_cached_cfg_len = 0;
+static char s_cached_cfg_base[192] = {0};
+
+static SemaphoreHandle_t s_frame_http_mux = NULL;
+static esp_http_client_handle_t s_frame_http_client = NULL;
+static char s_frame_http_origin[160] = {0};
+
+static SemaphoreHandle_t ensure_mutex(SemaphoreHandle_t *slot)
+{
+    if (*slot != NULL) {
+        return *slot;
+    }
+    SemaphoreHandle_t created = xSemaphoreCreateMutex();
+    if (!created) {
+        return NULL;
+    }
+    portENTER_CRITICAL(&s_init_mux);
+    if (*slot == NULL) {
+        *slot = created;
+        created = NULL;
+    }
+    SemaphoreHandle_t ret = *slot;
+    portEXIT_CRITICAL(&s_init_mux);
+    if (created) {
+        vSemaphoreDelete(created);
+    }
+    return ret;
+}
 
 static void *psram_prefer_malloc(size_t size)
 {
@@ -205,7 +248,14 @@ typedef struct {
     uint32_t cert_flags;
     int sock_errno;
     char redirect_loc[192];
+    char etag[48];
+    char app_id_hdr[32];
+    int refresh_seconds_hdr;
+    bool conn_close;
 } http_diag_ctx_t;
+
+static http_diag_ctx_t s_frame_diag_ctx = {0};
+static http_diag_ctx_t s_frame_final_ctx = {0};
 
 static void extract_endpoint_label(const char *url, char *out, size_t cap)
 {
@@ -252,6 +302,19 @@ static esp_err_t http_diag_event_handler(esp_http_client_event_t *evt)
     } else if (evt->event_id == HTTP_EVENT_ON_HEADER && evt->header_key && evt->header_value) {
         if (strcasecmp(evt->header_key, "location") == 0) {
             snprintf(ctx->redirect_loc, sizeof(ctx->redirect_loc), "%s", evt->header_value);
+        } else if (strcasecmp(evt->header_key, "etag") == 0) {
+            snprintf(ctx->etag, sizeof(ctx->etag), "%s", evt->header_value);
+        } else if (strcasecmp(evt->header_key, "x-app-id") == 0) {
+            snprintf(ctx->app_id_hdr, sizeof(ctx->app_id_hdr), "%s", evt->header_value);
+        } else if (strcasecmp(evt->header_key, "x-refresh-seconds") == 0) {
+            long v = strtol(evt->header_value, NULL, 10);
+            if (v >= 1 && v <= 3600) {
+                ctx->refresh_seconds_hdr = (int)v;
+            }
+        } else if (strcasecmp(evt->header_key, "connection") == 0) {
+            if (strcasecmp(evt->header_value, "close") == 0) {
+                ctx->conn_close = true;
+            }
         }
     }
     return ESP_OK;
@@ -265,7 +328,7 @@ static void record_api_telemetry(const char *url,
                                  const char *stage)
 {
     int64_t now_us = esp_timer_get_time();
-    bool ok = (err == ESP_OK && status >= 200 && status < 300);
+    bool ok = (err == ESP_OK && ((status >= 200 && status < 300) || status == 304));
 
     char ep[48];
     extract_endpoint_label(url, ep, sizeof(ep));
@@ -356,6 +419,8 @@ static esp_err_t http_request_alloc_once(esp_http_client_method_t method,
         return ESP_ERR_NO_MEM;
     }
 
+    esp_http_client_set_header(client, "User-Agent", "CleanSlate-ESP32/" CONFIG_CS_FIRMWARE_VERSION);
+    esp_http_client_set_header(client, "X-Firmware-Version", CONFIG_CS_FIRMWARE_VERSION);
     if (post_body && post_len > 0) {
         esp_http_client_set_header(client, "Content-Type", "application/json");
     }
@@ -545,6 +610,340 @@ static esp_err_t http_request_alloc(esp_http_client_method_t method,
                                  out_buf, out_len, out_status, NULL, NULL, true);
 }
 
+static void extract_url_origin(const char *url, char *out, size_t cap)
+{
+    if (!out || cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!url || !*url) {
+        return;
+    }
+    const char *p = strstr(url, "://");
+    if (!p) {
+        return;
+    }
+    const char *slash = strchr(p + 3, '/');
+    size_t len = slash ? (size_t)(slash - url) : strlen(url);
+    if (len >= cap) {
+        len = cap - 1U;
+    }
+    memcpy(out, url, len);
+    out[len] = '\0';
+}
+
+static void frame_http_reset_locked(void)
+{
+    if (s_frame_http_client) {
+        esp_http_client_close(s_frame_http_client);
+        esp_http_client_cleanup(s_frame_http_client);
+        s_frame_http_client = NULL;
+    }
+    s_frame_http_origin[0] = '\0';
+}
+
+static esp_err_t http_frame_get_keepalive(const char *url,
+                                          const char *if_none_match,
+                                          char **out_buf,
+                                          size_t *out_len,
+                                          int *out_status,
+                                          http_diag_ctx_t *diag_out)
+{
+    *out_buf = NULL;
+    *out_len = 0;
+    if (out_status) {
+        *out_status = 0;
+    }
+    if (diag_out) {
+        memset(diag_out, 0, sizeof(*diag_out));
+    }
+
+    SemaphoreHandle_t mux = ensure_mutex(&s_frame_http_mux);
+    if (!mux) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (xSemaphoreTake(mux, pdMS_TO_TICKS(30000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    int64_t t0 = esp_timer_get_time();
+    char origin[160];
+    extract_url_origin(url, origin, sizeof(origin));
+
+    int timeout_ms = CONFIG_CS_API_HTTP_TIMEOUT_MS;
+    if (timeout_ms < CS_HTTP_MIN_TIMEOUT_MS) {
+        timeout_ms = CS_HTTP_MIN_TIMEOUT_MS;
+    }
+
+    const char *stage = "init";
+    int status = 0;
+    esp_err_t err = ESP_FAIL;
+    memset(&s_frame_final_ctx, 0, sizeof(s_frame_final_ctx));
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+        bool reused = false;
+        if (s_frame_http_client && strcmp(s_frame_http_origin, origin) != 0) {
+            frame_http_reset_locked();
+        }
+        if (!s_frame_http_client) {
+            esp_http_client_config_t cfg = {
+                .url = url,
+                .method = HTTP_METHOD_GET,
+                .timeout_ms = timeout_ms,
+                .buffer_size = 4096,
+                .buffer_size_tx = 2048,
+                .keep_alive_enable = true,
+                .keep_alive_idle = 30,
+                .keep_alive_interval = 5,
+                .keep_alive_count = 3,
+                .crt_bundle_attach = esp_crt_bundle_attach,
+                .event_handler = http_diag_event_handler,
+                .user_data = &s_frame_diag_ctx,
+            };
+            s_frame_http_client = esp_http_client_init(&cfg);
+            if (!s_frame_http_client) {
+                stage = "oom";
+                err = ESP_ERR_NO_MEM;
+                break;
+            }
+            snprintf(s_frame_http_origin, sizeof(s_frame_http_origin), "%s", origin);
+        } else {
+            reused = true;
+            esp_http_client_set_url(s_frame_http_client, url);
+            esp_http_client_set_method(s_frame_http_client, HTTP_METHOD_GET);
+        }
+
+        memset(&s_frame_diag_ctx, 0, sizeof(s_frame_diag_ctx));
+        esp_http_client_set_header(s_frame_http_client, "User-Agent",
+                                   "CleanSlate-ESP32/" CONFIG_CS_FIRMWARE_VERSION);
+        esp_http_client_set_header(s_frame_http_client, "X-Firmware-Version",
+                                   CONFIG_CS_FIRMWARE_VERSION);
+        if (if_none_match && if_none_match[0]) {
+            esp_http_client_set_header(s_frame_http_client, "If-None-Match", if_none_match);
+        } else {
+            esp_http_client_delete_header(s_frame_http_client, "If-None-Match");
+        }
+
+        stage = "connect";
+        err = esp_http_client_open(s_frame_http_client, 0);
+        if (err != ESP_OK) {
+            if (s_frame_diag_ctx.tls_err != 0 || s_frame_diag_ctx.cert_flags != 0) {
+                stage = "tls";
+            }
+            if (s_frame_diag_ctx.sock_errno == 0 && errno != 0) {
+                s_frame_diag_ctx.sock_errno = errno;
+            }
+            s_frame_final_ctx = s_frame_diag_ctx;
+            frame_http_reset_locked();
+            if (reused && attempt == 0) {
+                ESP_LOGD(TAG, "Keep-alive socket dropped on open; reconnecting...");
+                continue;
+            }
+            break;
+        }
+
+        stage = "headers";
+        int64_t content_len = esp_http_client_fetch_headers(s_frame_http_client);
+        status = esp_http_client_get_status_code(s_frame_http_client);
+        s_frame_final_ctx = s_frame_diag_ctx;
+
+        if (content_len < 0 && status == 0) {
+            if (s_frame_final_ctx.sock_errno == 0 && errno != 0) {
+                s_frame_final_ctx.sock_errno = errno;
+            }
+            err = ESP_FAIL;
+            frame_http_reset_locked();
+            if (reused && attempt == 0) {
+                ESP_LOGD(TAG, "Keep-alive socket dropped on headers; reconnecting...");
+                continue;
+            }
+            break;
+        }
+
+        if (status == 304) {
+            int flushed = 0;
+            esp_http_client_flush_response(s_frame_http_client, &flushed);
+            if (s_frame_final_ctx.conn_close) {
+                frame_http_reset_locked();
+            }
+            err = ESP_OK;
+            stage = "ok";
+            break;
+        }
+
+        if ((status == 301 || status == 302 || status == 303 ||
+             status == 307 || status == 308) &&
+            (strncmp(s_frame_final_ctx.redirect_loc, "http://", 7) == 0 ||
+             strncmp(s_frame_final_ctx.redirect_loc, "https://", 8) == 0)) {
+            char *redir = psram_prefer_malloc(sizeof(s_frame_final_ctx.redirect_loc));
+            if (redir) {
+                snprintf(redir, sizeof(s_frame_final_ctx.redirect_loc), "%s", s_frame_final_ctx.redirect_loc);
+            }
+            frame_http_reset_locked();
+            xSemaphoreGive(mux);
+            if (!redir) {
+                return ESP_ERR_NO_MEM;
+            }
+            esp_err_t rerr = http_request_alloc_ex(HTTP_METHOD_GET, redir, NULL, 0,
+                                                   out_buf, out_len, out_status, diag_out, NULL, true);
+            free(redir);
+            return rerr;
+        }
+
+        if (content_len > MAX_HTTP_BODY_BYTES) {
+            stage = "body";
+            err = ESP_ERR_NO_MEM;
+            frame_http_reset_locked();
+            break;
+        }
+
+        size_t cap = (content_len > 0) ? ((size_t)content_len + 1U) : 8192U;
+        if (cap > MAX_HTTP_BODY_BYTES + 1U) {
+            cap = MAX_HTTP_BODY_BYTES + 1U;
+        }
+        char *buf = psram_prefer_malloc(cap);
+        if (!buf) {
+            stage = "oom";
+            err = ESP_ERR_NO_MEM;
+            frame_http_reset_locked();
+            break;
+        }
+
+        stage = "body";
+        size_t total = 0;
+        err = ESP_OK;
+        while (true) {
+            if (total + 1U >= cap) {
+                if (cap >= MAX_HTTP_BODY_BYTES + 1U) {
+                    err = ESP_ERR_NO_MEM;
+                    break;
+                }
+                size_t new_cap = cap * 2U;
+                if (new_cap > MAX_HTTP_BODY_BYTES + 1U) {
+                    new_cap = MAX_HTTP_BODY_BYTES + 1U;
+                }
+                char *grown = psram_prefer_realloc(buf, new_cap);
+                if (!grown) {
+                    err = ESP_ERR_NO_MEM;
+                    break;
+                }
+                buf = grown;
+                cap = new_cap;
+            }
+            int r = esp_http_client_read(s_frame_http_client, buf + total, (int)(cap - 1U - total));
+            if (r < 0) {
+                err = ESP_FAIL;
+                break;
+            }
+            if (r == 0) {
+                if (esp_http_client_is_complete_data_received(s_frame_http_client) || content_len < 0) {
+                    err = ESP_OK;
+                    break;
+                }
+            } else {
+                total += (size_t)r;
+            }
+        }
+
+        if (err != ESP_OK) {
+            free(buf);
+            frame_http_reset_locked();
+            if (reused && attempt == 0) {
+                ESP_LOGD(TAG, "Keep-alive socket dropped on body; reconnecting...");
+                continue;
+            }
+            break;
+        }
+
+        if (s_frame_final_ctx.conn_close || !esp_http_client_is_complete_data_received(s_frame_http_client)) {
+            frame_http_reset_locked();
+        }
+
+        buf[total] = '\0';
+        *out_buf = buf;
+        *out_len = total;
+        stage = (status >= 200 && status < 300) ? "ok" : "http";
+        err = (status >= 200 && status < 300) ? ESP_OK : ESP_FAIL;
+        break;
+    }
+
+    uint32_t lat_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000LL);
+    if (out_status) {
+        *out_status = status;
+    }
+    if (diag_out) {
+        *diag_out = s_frame_final_ctx;
+    }
+    record_api_telemetry(url, err, status, &s_frame_final_ctx, lat_ms, stage);
+    xSemaphoreGive(mux);
+    return err;
+}
+
+static void cache_store_json_slot(char **dst_buf, size_t *dst_len, char *dst_base, size_t base_cap,
+                                  const char *base_url, const char *json, size_t len)
+{
+    if (!json || len == 0 || !base_url) {
+        return;
+    }
+    SemaphoreHandle_t mux = ensure_mutex(&s_json_cache_mux);
+    if (!mux) {
+        return;
+    }
+    char *copy = psram_prefer_malloc(len + 1U);
+    if (!copy) {
+        return;
+    }
+    memcpy(copy, json, len);
+    copy[len] = '\0';
+    if (xSemaphoreTake(mux, pdMS_TO_TICKS(100)) == pdTRUE) {
+        free(*dst_buf);
+        *dst_buf = copy;
+        *dst_len = len;
+        snprintf(dst_base, base_cap, "%s", base_url);
+        xSemaphoreGive(mux);
+    } else {
+        free(copy);
+    }
+}
+
+static void cache_clear_cfg_json(void)
+{
+    SemaphoreHandle_t mux = ensure_mutex(&s_json_cache_mux);
+    if (!mux) {
+        return;
+    }
+    if (xSemaphoreTake(mux, pdMS_TO_TICKS(100)) == pdTRUE) {
+        free(s_cached_cfg_json);
+        s_cached_cfg_json = NULL;
+        s_cached_cfg_len = 0;
+        s_cached_cfg_base[0] = '\0';
+        xSemaphoreGive(mux);
+    }
+}
+
+static bool cache_read_json_slot(char *const *src_buf, const size_t *src_len, const char *src_base,
+                                 const char *cur_base, char **out_json, size_t *out_len)
+{
+    SemaphoreHandle_t mux = ensure_mutex(&s_json_cache_mux);
+    if (!mux) {
+        return false;
+    }
+    bool hit = false;
+    if (xSemaphoreTake(mux, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (*src_buf && *src_len > 0 && strcmp(src_base, cur_base) == 0) {
+            char *copy = psram_prefer_malloc(*src_len + 1U);
+            if (copy) {
+                memcpy(copy, *src_buf, *src_len + 1U);
+                *out_json = copy;
+                *out_len = *src_len;
+                hit = true;
+            }
+        }
+        xSemaphoreGive(mux);
+    }
+    return hit;
+}
+
 static size_t append_json_escaped(char *dst, size_t cap, size_t pos, const char *s)
 {
     if (!s) {
@@ -574,9 +973,11 @@ static size_t append_json_escaped(char *dst, size_t cap, size_t pos, const char 
     return pos;
 }
 
+static size_t append_payload_fmt(char *dst, size_t cap, size_t pos, const char *fmt, ...);
+
 static size_t append_csv_array(char *dst, size_t cap, size_t pos, const char *csv)
 {
-    pos += (size_t)snprintf(dst + pos, (pos < cap) ? (cap - pos) : 0, "[");
+    pos = append_payload_fmt(dst, cap, pos, "[");
     if (csv && *csv) {
         char copy[128];
         snprintf(copy, sizeof(copy), "%s", csv);
@@ -589,17 +990,17 @@ static size_t append_csv_array(char *dst, size_t cap, size_t pos, const char *cs
             while (len > 0 && tok[len - 1] == ' ') tok[--len] = '\0';
             if (len > 0) {
                 if (!first) {
-                    pos += (size_t)snprintf(dst + pos, cap - pos, ",");
+                    pos = append_payload_fmt(dst, cap, pos, ",");
                 }
-                pos += (size_t)snprintf(dst + pos, cap - pos, "\"");
+                pos = append_payload_fmt(dst, cap, pos, "\"");
                 pos = append_json_escaped(dst, cap, pos, tok);
-                pos += (size_t)snprintf(dst + pos, (pos < cap) ? (cap - pos) : 0, "\"");
+                pos = append_payload_fmt(dst, cap, pos, "\"");
                 first = false;
             }
             tok = strtok_r(NULL, ",", &saveptr);
         }
     }
-    pos += (size_t)snprintf(dst + pos, (pos < cap) ? (cap - pos) : 0, "]");
+    pos = append_payload_fmt(dst, cap, pos, "]");
     return pos;
 }
 
@@ -631,6 +1032,10 @@ esp_err_t api_client_fetch_config(cs_device_config_t *out_cfg)
         return err;
     }
 
+    cache_store_json_slot(&s_cached_cfg_json, &s_cached_cfg_len,
+                          s_cached_cfg_base, sizeof(s_cached_cfg_base),
+                          base, body, body_len);
+
     json_span_t root = json_root(body, body_len);
     json_span_t val;
 
@@ -645,21 +1050,26 @@ esp_err_t api_client_fetch_config(cs_device_config_t *out_cfg)
         while (json_arr_iter(val, &cur, &elem)) {
             char t[16];
             if (json_as_str(elem, t, sizeof(t)) && t[0]) {
-                if (pos > 0 && pos + 1 < sizeof(out_cfg->favorite_teams)) {
-                    out_cfg->favorite_teams[pos++] = ',';
+                if (pos > 0) {
+                    pos = append_payload_fmt(out_cfg->favorite_teams,
+                                             sizeof(out_cfg->favorite_teams), pos, ",");
                 }
-                pos += (size_t)snprintf(out_cfg->favorite_teams + pos,
-                                        sizeof(out_cfg->favorite_teams) - pos, "%s", t);
+                pos = append_payload_fmt(out_cfg->favorite_teams,
+                                         sizeof(out_cfg->favorite_teams), pos, "%s", t);
             }
         }
     }
 
-    if (json_obj_get(root, "enabled_apps", &val)) {
+    if (json_obj_get(root, "enabled_apps", &val) && !json_is_null(val) &&
+        val.ptr && val.len >= 2 && val.ptr[0] == '[') {
+        out_cfg->enabled_apps_present = true;
         size_t cur = 0;
         json_span_t elem;
         while (out_cfg->enabled_app_count < CS_MAX_APPS && json_arr_iter(val, &cur, &elem)) {
-            if (json_as_str(elem, out_cfg->enabled_apps[out_cfg->enabled_app_count],
-                            sizeof(out_cfg->enabled_apps[0]))) {
+            char app_buf[32] = {0};
+            if (json_as_str(elem, app_buf, sizeof(app_buf)) && app_buf[0] != '\0') {
+                snprintf(out_cfg->enabled_apps[out_cfg->enabled_app_count],
+                         sizeof(out_cfg->enabled_apps[0]), "%s", app_buf);
                 out_cfg->enabled_app_count++;
             }
         }
@@ -688,14 +1098,66 @@ esp_err_t api_client_fetch_config(cs_device_config_t *out_cfg)
         }
     }
 
+    if (json_obj_get(root, "active_events", &val) && !json_is_null(val)) {
+        json_span_t ev;
+        bool b_act = false;
+        bool h_act = false;
+        if (json_obj_get(val, "birthdays", &ev)) {
+            json_as_bool(ev, &b_act);
+            out_cfg->active_events_known = true;
+            out_cfg->active_event_birthdays = b_act;
+        }
+        if (json_obj_get(val, "holidays", &ev)) {
+            json_as_bool(ev, &h_act);
+            out_cfg->active_events_known = true;
+            out_cfg->active_event_holidays = h_act;
+        }
+    }
+
+    /* Sync scheduled alarms locally to NVS so ESP32 fires them right at :00 with zero server delay */
+    {
+        bool alarm_app_en = false;
+        for (size_t i = 0; i < out_cfg->enabled_app_count; i++) {
+            if (strcmp(out_cfg->enabled_apps[i], "alarm") == 0) {
+                alarm_app_en = true;
+                break;
+            }
+        }
+        json_span_t app_settings;
+        json_span_t alarm_obj = {0};
+        if (json_obj_get(root, "app_settings", &app_settings) && !json_is_null(app_settings)) {
+            json_obj_get(app_settings, "alarm", &alarm_obj);
+        }
+        if (out_cfg->enabled_apps_present || (alarm_obj.ptr && alarm_obj.len >= 2)) {
+            cs_alarm_schedule_t alarm_sched;
+            settings_store_parse_alarms_json(alarm_app_en, alarm_obj.ptr, alarm_obj.len, &alarm_sched);
+            settings_store_save_alarms(&alarm_sched);
+        }
+    }
+
     out_cfg->valid = true;
     free(body);
     return ESP_OK;
 }
 
-esp_err_t api_client_post_config(const cs_local_settings_t *settings,
-                                 const char *enabled_apps_csv,
-                                 const char *app_settings_json_obj)
+static size_t append_payload_fmt(char *dst, size_t cap, size_t pos, const char *fmt, ...)
+{
+    if (!dst || cap == 0 || pos >= cap) {
+        return cap ? cap - 1U : 0U;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(dst + pos, cap - pos, fmt, ap);
+    va_end(ap);
+    if (n <= 0) {
+        return pos;
+    }
+    size_t next = pos + (size_t)n;
+    return (next < cap) ? next : (cap - 1U);
+}
+
+esp_err_t api_client_post_config_ext(const cs_local_settings_t *settings,
+                                     const cs_cloud_config_extras_t *extras)
 {
     if (!settings) {
         return ESP_ERR_INVALID_ARG;
@@ -707,46 +1169,66 @@ esp_err_t api_client_post_config(const cs_local_settings_t *settings,
     snprintf(url, sizeof(url), "%s/api/v1/device/%s/config",
              base, wifi_manager_get_device_id());
 
-    size_t extra_len = app_settings_json_obj ? strlen(app_settings_json_obj) : 0;
-    size_t cap = 1024 + extra_len;
-    char *payload = malloc(cap);
+    size_t extra_len = 0;
+    if (extras) {
+        if (extras->enabled_apps_json) extra_len += strlen(extras->enabled_apps_json);
+        if (extras->app_settings_json) extra_len += strlen(extras->app_settings_json);
+        if (extras->app_schedules_json) extra_len += strlen(extras->app_schedules_json);
+    }
+    size_t cap = 1536 + extra_len;
+    char *payload = psram_prefer_malloc(cap);
     if (!payload) {
         return ESP_ERR_NO_MEM;
     }
 
     size_t pos = 0;
-    pos += (size_t)snprintf(payload + pos, cap - pos, "{\"device_name\":\"");
+    pos = append_payload_fmt(payload, cap, pos, "{\"device_name\":\"");
     pos = append_json_escaped(payload, cap, pos, settings->device_name);
-    pos += (size_t)snprintf(payload + pos, cap - pos, "\",\"favorite_teams\":");
+    pos = append_payload_fmt(payload, cap, pos, "\",\"favorite_teams\":");
     pos = append_csv_array(payload, cap, pos, settings->favorite_teams);
 
-    if (enabled_apps_csv && *enabled_apps_csv) {
-        pos += (size_t)snprintf(payload + pos, cap - pos, ",\"enabled_apps\":");
-        pos = append_csv_array(payload, cap, pos, enabled_apps_csv);
+    if (extras && extras->enabled_apps_json && extras->enabled_apps_json[0] == '[') {
+        pos = append_payload_fmt(payload, cap, pos, ",\"enabled_apps\":%s", extras->enabled_apps_json);
+    }
+    if (extras && extras->selection_mode && extras->selection_mode[0] != '\0') {
+        pos = append_payload_fmt(payload, cap, pos, ",\"selection_mode\":\"");
+        pos = append_json_escaped(payload, cap, pos, extras->selection_mode);
+        pos = append_payload_fmt(payload, cap, pos, "\"");
+    }
+    if (extras && extras->rotation_seconds >= 5 && extras->rotation_seconds <= 300) {
+        pos = append_payload_fmt(payload, cap, pos, ",\"rotation_seconds\":%d", extras->rotation_seconds);
+    }
+    if (extras && extras->rotate_include_clock >= 0) {
+        pos = append_payload_fmt(payload, cap, pos, ",\"rotate_include_clock\":%s",
+                                 extras->rotate_include_clock ? "true" : "false");
     }
 
-    pos += (size_t)snprintf(payload + pos, cap - pos,
-                            ",\"quiet_hours\":{\"enabled\":%s,\"start\":\"",
-                            settings->quiet_enabled ? "true" : "false");
+    pos = append_payload_fmt(payload, cap, pos,
+                             ",\"quiet_hours\":{\"enabled\":%s,\"start\":\"",
+                             settings->quiet_enabled ? "true" : "false");
     pos = append_json_escaped(payload, cap, pos, settings->quiet_start);
-    pos += (size_t)snprintf(payload + pos, cap - pos, "\",\"end\":\"");
+    pos = append_payload_fmt(payload, cap, pos, "\",\"end\":\"");
     pos = append_json_escaped(payload, cap, pos, settings->quiet_end);
-    pos += (size_t)snprintf(payload + pos, cap - pos, "\",\"timezone\":\"");
+    pos = append_payload_fmt(payload, cap, pos, "\",\"timezone\":\"");
     pos = append_json_escaped(payload, cap, pos, settings->timezone);
-    pos += (size_t)snprintf(payload + pos, cap - pos, "\"}");
+    pos = append_payload_fmt(payload, cap, pos, "\"}");
 
     if (settings->brightness_override >= 0 && settings->brightness_override <= 255) {
-        pos += (size_t)snprintf(payload + pos, cap - pos,
-                                ",\"brightness_override\":%d", settings->brightness_override);
+        pos = append_payload_fmt(payload, cap, pos,
+                                 ",\"brightness_override\":%d", settings->brightness_override);
     } else {
-        pos += (size_t)snprintf(payload + pos, cap - pos, ",\"brightness_override\":null");
+        pos = append_payload_fmt(payload, cap, pos, ",\"brightness_override\":null");
     }
 
-    if (app_settings_json_obj && app_settings_json_obj[0] == '{') {
-        pos += (size_t)snprintf(payload + pos, cap - pos,
-                                ",\"app_settings\":%s", app_settings_json_obj);
+    if (extras && extras->app_settings_json && extras->app_settings_json[0] == '{') {
+        pos = append_payload_fmt(payload, cap, pos,
+                                 ",\"app_settings\":%s", extras->app_settings_json);
     }
-    pos += (size_t)snprintf(payload + pos, (pos < cap) ? (cap - pos) : 0, "}");
+    if (extras && extras->app_schedules_json && extras->app_schedules_json[0] == '{') {
+        pos = append_payload_fmt(payload, cap, pos,
+                                 ",\"app_schedules\":%s", extras->app_schedules_json);
+    }
+    pos = append_payload_fmt(payload, cap, pos, "}");
 
     char *resp = NULL;
     size_t resp_len = 0;
@@ -755,10 +1237,117 @@ esp_err_t api_client_post_config(const cs_local_settings_t *settings,
                                        &resp, &resp_len, &status);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "POST /config failed (status=%d, err=%s)", status, esp_err_to_name(err));
+        cache_clear_cfg_json();
+    } else if (resp && resp_len > 2 && resp[0] == '{') {
+        cache_store_json_slot(&s_cached_cfg_json, &s_cached_cfg_len,
+                              s_cached_cfg_base, sizeof(s_cached_cfg_base),
+                              base, resp, resp_len);
+    } else {
+        cache_clear_cfg_json();
     }
     free(payload);
     free(resp);
     return err;
+}
+
+esp_err_t api_client_post_config(const cs_local_settings_t *settings,
+                                 const char *enabled_apps_csv,
+                                 const char *app_settings_json_obj)
+{
+    char enabled_arr[640] = {0};
+    if (enabled_apps_csv) {
+        append_csv_array(enabled_arr, sizeof(enabled_arr), 0, enabled_apps_csv);
+    }
+    cs_cloud_config_extras_t extras = {
+        .enabled_apps_json = enabled_apps_csv ? enabled_arr : NULL,
+        .selection_mode = NULL,
+        .rotation_seconds = 0,
+        .rotate_include_clock = -1,
+        .app_settings_json = app_settings_json_obj,
+        .app_schedules_json = NULL,
+    };
+    return api_client_post_config_ext(settings, &extras);
+}
+
+esp_err_t api_client_delete_alarm(const char *alarm_id)
+{
+    if (!alarm_id || !alarm_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    char base[192];
+    settings_store_get_api_base_url(base, sizeof(base));
+    char url[320];
+    snprintf(url, sizeof(url), "%s/api/v1/device/%s/alarms/%s",
+             base, wifi_manager_get_device_id(), alarm_id);
+
+    char *resp = NULL;
+    size_t resp_len = 0;
+    int status = 0;
+    esp_err_t err = http_request_alloc(HTTP_METHOD_DELETE, url, NULL, 0, &resp, &resp_len, &status);
+    free(resp);
+    if (err == ESP_OK || status == 404) {
+        ESP_LOGI(TAG, "Synced one-time alarm deletion to cloud: %s (status=%d)", alarm_id, status);
+        return ESP_OK;
+    }
+    ESP_LOGW(TAG, "DELETE /alarms/%s failed (status=%d, err=%s)", alarm_id, status, esp_err_to_name(err));
+    return err;
+}
+
+static void cache_apps_screens_from_json(const char *json, size_t len)
+{
+    if (!json || len == 0) {
+        return;
+    }
+    json_span_t root = json_root(json, len);
+    json_span_t apps_arr;
+    if (!json_obj_get(root, "apps", &apps_arr) || json_is_null(apps_arr)) {
+        return;
+    }
+
+    cs_app_screens_t *parsed = psram_prefer_calloc(CS_MAX_APPS, sizeof(cs_app_screens_t));
+    if (!parsed) {
+        return;
+    }
+
+    size_t cnt = 0;
+    size_t cur = 0;
+    json_span_t app_obj;
+    while (cnt < CS_MAX_APPS && json_arr_iter(apps_arr, &cur, &app_obj)) {
+        json_span_t v;
+        if (!json_obj_get(app_obj, "app_id", &v) ||
+            !json_as_str(v, parsed[cnt].app_id, sizeof(parsed[cnt].app_id)) ||
+            parsed[cnt].app_id[0] == '\0') {
+            continue;
+        }
+
+        json_span_t screens_arr;
+        if (json_obj_get(app_obj, "screens", &screens_arr) && !json_is_null(screens_arr)) {
+            size_t scur = 0;
+            json_span_t sobj;
+            while (parsed[cnt].screen_count < CS_MAX_SCREENS_PER_APP &&
+                   json_arr_iter(screens_arr, &scur, &sobj)) {
+                size_t si = parsed[cnt].screen_count;
+                if (json_obj_get(sobj, "screen_id", &v) &&
+                    json_as_str(v, parsed[cnt].screens[si].screen_id,
+                                sizeof(parsed[cnt].screens[si].screen_id)) &&
+                    parsed[cnt].screens[si].screen_id[0] != '\0') {
+                    if (json_obj_get(sobj, "name", &v)) {
+                        json_as_str(v, parsed[cnt].screens[si].name,
+                                    sizeof(parsed[cnt].screens[si].name));
+                    }
+                    parsed[cnt].screen_count++;
+                }
+            }
+        }
+        cnt++;
+    }
+
+    portENTER_CRITICAL(&s_apps_mux);
+    memcpy(s_app_screens, parsed, cnt * sizeof(cs_app_screens_t));
+    s_app_screens_count = cnt;
+    portEXIT_CRITICAL(&s_apps_mux);
+
+    free(parsed);
 }
 
 esp_err_t api_client_fetch_apps_json(char **out_json, size_t *out_len)
@@ -776,8 +1365,153 @@ esp_err_t api_client_fetch_apps_json(char **out_json, size_t *out_len)
         free(*out_json);
         *out_json = NULL;
         *out_len = 0;
+    } else if (*out_json && *out_len > 0) {
+        cache_apps_screens_from_json(*out_json, *out_len);
+        cache_store_json_slot(&s_cached_apps_json, &s_cached_apps_len,
+                              s_cached_apps_base, sizeof(s_cached_apps_base),
+                              base, *out_json, *out_len);
     }
     return err;
+}
+
+esp_err_t api_client_get_cached_apps_json(bool force_refresh, char **out_json, size_t *out_len)
+{
+    if (!out_json || !out_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_json = NULL;
+    *out_len = 0;
+    if (!force_refresh) {
+        char base[192];
+        settings_store_get_api_base_url(base, sizeof(base));
+        if (cache_read_json_slot(&s_cached_apps_json, &s_cached_apps_len,
+                                 s_cached_apps_base, base, out_json, out_len)) {
+            return ESP_OK;
+        }
+    }
+    if (!wifi_manager_is_connected()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return api_client_fetch_apps_json(out_json, out_len);
+}
+
+esp_err_t api_client_sync_apps_metadata(void)
+{
+    char *json = NULL;
+    size_t len = 0;
+    esp_err_t err = api_client_fetch_apps_json(&json, &len);
+    free(json);
+    return err;
+}
+
+esp_err_t api_client_fetch_active_events(bool *birthdays_active, bool *holidays_active)
+{
+    if (!birthdays_active || !holidays_active) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    char base[192];
+    settings_store_get_api_base_url(base, sizeof(base));
+    char url[288];
+    snprintf(url, sizeof(url), "%s/api/v1/device/%s/diagnostics",
+             base, wifi_manager_get_device_id());
+
+    char *body = NULL;
+    size_t body_len = 0;
+    int status = 0;
+    esp_err_t err = http_request_alloc(HTTP_METHOD_GET, url, NULL, 0, &body, &body_len, &status);
+    if (err != ESP_OK || !body) {
+        free(body);
+        return (err != ESP_OK) ? err : ESP_FAIL;
+    }
+
+    json_span_t root = json_root(body, body_len);
+    json_span_t ev_obj;
+    bool found = false;
+    if (json_obj_get(root, "active_events", &ev_obj) && !json_is_null(ev_obj)) {
+        json_span_t fv;
+        if (json_obj_get(ev_obj, "birthdays", &fv)) {
+            json_as_bool(fv, birthdays_active);
+            found = true;
+        }
+        if (json_obj_get(ev_obj, "holidays", &fv)) {
+            json_as_bool(fv, holidays_active);
+            found = true;
+        }
+    }
+    free(body);
+    return found ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
+size_t api_client_expand_rotary_slots(const cs_device_config_t *cfg,
+                                      cs_rotary_slot_t *out_slots,
+                                      size_t max_slots)
+{
+    if (!cfg || !out_slots || max_slots == 0) {
+        return 0;
+    }
+
+    cs_app_screens_t *meta = psram_prefer_malloc(CS_MAX_APPS * sizeof(cs_app_screens_t));
+    size_t meta_cnt = 0;
+    if (meta) {
+        portENTER_CRITICAL(&s_apps_mux);
+        meta_cnt = s_app_screens_count;
+        if (meta_cnt > CS_MAX_APPS) {
+            meta_cnt = CS_MAX_APPS;
+        }
+        if (meta_cnt > 0) {
+            memcpy(meta, s_app_screens, meta_cnt * sizeof(cs_app_screens_t));
+        }
+        portEXIT_CRITICAL(&s_apps_mux);
+    }
+
+    size_t out_cnt = 0;
+    size_t app_limit = cfg->enabled_app_count;
+    if (app_limit > CS_MAX_APPS) {
+        app_limit = CS_MAX_APPS;
+    }
+
+    for (size_t i = 0; i < app_limit && out_cnt < max_slots; i++) {
+        const char *app_id = cfg->enabled_apps[i];
+        if (!app_id[0]) {
+            continue;
+        }
+        if (cfg->active_events_known) {
+            if (strcmp(app_id, "birthdays") == 0 && !cfg->active_event_birthdays) {
+                continue;
+            }
+            if (strcmp(app_id, "holidays") == 0 && !cfg->active_event_holidays) {
+                continue;
+            }
+        }
+
+        const cs_app_screens_t *desc = NULL;
+        for (size_t m = 0; m < meta_cnt; m++) {
+            if (strcmp(meta[m].app_id, app_id) == 0) {
+                desc = &meta[m];
+                break;
+            }
+        }
+
+        if (desc && desc->screen_count > 0) {
+            for (size_t s = 0; s < desc->screen_count && out_cnt < max_slots; s++) {
+                cs_rotary_slot_t *sl = &out_slots[out_cnt++];
+                memset(sl, 0, sizeof(*sl));
+                snprintf(sl->app_id, sizeof(sl->app_id), "%s", app_id);
+                snprintf(sl->screen_id, sizeof(sl->screen_id), "%s", desc->screens[s].screen_id);
+                snprintf(sl->key, sizeof(sl->key), "%s:%s", app_id, desc->screens[s].screen_id);
+                snprintf(sl->label, sizeof(sl->label), "%s",
+                         desc->screens[s].name[0] ? desc->screens[s].name : desc->screens[s].screen_id);
+            }
+        } else {
+            cs_rotary_slot_t *sl = &out_slots[out_cnt++];
+            memset(sl, 0, sizeof(*sl));
+            snprintf(sl->app_id, sizeof(sl->app_id), "%s", app_id);
+            snprintf(sl->key, sizeof(sl->key), "%s", app_id);
+        }
+    }
+
+    free(meta);
+    return out_cnt;
 }
 
 esp_err_t api_client_fetch_device_config_json(char **out_json, size_t *out_len)
@@ -796,8 +1530,33 @@ esp_err_t api_client_fetch_device_config_json(char **out_json, size_t *out_len)
         free(*out_json);
         *out_json = NULL;
         *out_len = 0;
+    } else if (*out_json && *out_len > 0) {
+        cache_store_json_slot(&s_cached_cfg_json, &s_cached_cfg_len,
+                              s_cached_cfg_base, sizeof(s_cached_cfg_base),
+                              base, *out_json, *out_len);
     }
     return err;
+}
+
+esp_err_t api_client_get_cached_device_config_json(bool force_refresh, char **out_json, size_t *out_len)
+{
+    if (!out_json || !out_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_json = NULL;
+    *out_len = 0;
+    if (!force_refresh) {
+        char base[192];
+        settings_store_get_api_base_url(base, sizeof(base));
+        if (cache_read_json_slot(&s_cached_cfg_json, &s_cached_cfg_len,
+                                 s_cached_cfg_base, base, out_json, out_len)) {
+            return ESP_OK;
+        }
+    }
+    if (!wifi_manager_is_connected()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return api_client_fetch_device_config_json(out_json, out_len);
 }
 
 static void parse_overlays(json_span_t overlays_arr, cs_frame_response_t *out)
@@ -965,6 +1724,23 @@ static void parse_alert(json_span_t alert_obj, cs_alert_t *out)
         if (json_obj_get(audio, "volume", &fv) && json_as_int(fv, &iv) && iv >= 0 && iv <= 30) {
             out->audio_volume = (uint8_t)iv;
         }
+        bool rep = false;
+        if (json_obj_get(audio, "repeat", &fv) && json_as_bool(fv, &rep)) {
+            out->audio_repeat = rep;
+        } else if (strcmp(out->event_type, "alarm") == 0) {
+            out->audio_repeat = true;
+        }
+        if (json_obj_get(audio, "repeat_interval_ms", &fv) && json_as_int(fv, &iv) && iv > 0) {
+            out->audio_repeat_interval_ms = (uint32_t)((iv > 120000) ? 120000 : iv);
+        } else if (out->audio_repeat) {
+            out->audio_repeat_interval_ms =
+                settings_store_alarm_repeat_interval_ms(out->audio_folder, out->audio_track);
+        }
+        if (json_obj_get(audio, "max_duration_seconds", &fv) && json_as_int(fv, &iv) && iv > 0) {
+            out->audio_max_duration_s = (uint32_t)((iv > 900) ? 900 : iv);
+        } else if (out->audio_repeat) {
+            out->audio_max_duration_s = 120U;
+        }
     }
 
     out->valid = (out->frame_count > 0 && out->strip_data != NULL);
@@ -986,45 +1762,88 @@ static void parse_alert(json_span_t alert_obj, cs_alert_t *out)
     }
 }
 
-esp_err_t api_client_fetch_frame(const char *app_id_override,
-                                 const char *teams_override,
-                                 cs_frame_response_t *out_frame)
+esp_err_t api_client_fetch_frame_ex(const char *app_id_override,
+                                    const char *screen_override,
+                                    const char *teams_override,
+                                    bool consume_alerts,
+                                    const char *if_none_match,
+                                    cs_frame_response_t *out_frame)
 {
     if (!out_frame) {
         return ESP_ERR_INVALID_ARG;
     }
     memset(out_frame, 0, sizeof(*out_frame));
     out_frame->refresh_seconds = CONFIG_CS_API_POLL_INTERVAL_SEC;
+    if (screen_override && *screen_override) {
+        snprintf(out_frame->screen_id, sizeof(out_frame->screen_id), "%s", screen_override);
+    }
 
     char base[192];
     settings_store_get_api_base_url(base, sizeof(base));
 
-    char url[384];
-    int n = snprintf(url, sizeof(url), "%s/api/v1/device/%s/frame",
-                     base, wifi_manager_get_device_id());
-    size_t pos = (n > 0) ? (size_t)n : 0U;
-    if (pos > sizeof(url)) {
-        pos = sizeof(url);
-    }
+    char url[480];
+    size_t pos = append_payload_fmt(url, sizeof(url), 0, "%s/api/v1/device/%s/frame",
+                                    base, wifi_manager_get_device_id());
     bool has_q = false;
     if (app_id_override && *app_id_override && pos + 9 < sizeof(url)) {
-        pos += (size_t)snprintf(url + pos, sizeof(url) - pos, "?app_id=");
+        pos = append_payload_fmt(url, sizeof(url), pos, "?app_id=");
         pos = append_url_encoded(url, sizeof(url), pos, app_id_override);
         has_q = true;
     }
+    if (screen_override && *screen_override && pos + 9 < sizeof(url)) {
+        pos = append_payload_fmt(url, sizeof(url), pos, "%sscreen=", has_q ? "&" : "?");
+        pos = append_url_encoded(url, sizeof(url), pos, screen_override);
+        has_q = true;
+    }
     if (teams_override && *teams_override && pos + 8 < sizeof(url)) {
-        pos += (size_t)snprintf(url + pos, sizeof(url) - pos, "%steams=", has_q ? "&" : "?");
-        append_url_encoded(url, sizeof(url), pos, teams_override);
+        pos = append_payload_fmt(url, sizeof(url), pos, "%steams=", has_q ? "&" : "?");
+        pos = append_url_encoded(url, sizeof(url), pos, teams_override);
+        has_q = true;
+    }
+    if (sntp_time_is_synced() && pos + 16 < sizeof(url)) {
+        pos = append_payload_fmt(url, sizeof(url), pos, "%slocal_alarms=1", has_q ? "&" : "?");
+        has_q = true;
+    }
+    if (!consume_alerts && pos + 18 < sizeof(url)) {
+        pos = append_payload_fmt(url, sizeof(url), pos, "%sconsume_alerts=0", has_q ? "&" : "?");
+        has_q = true;
+    }
+    if (pos + 12 < sizeof(url)) {
+        pos = append_payload_fmt(url, sizeof(url), pos, "%scompress=1", has_q ? "&" : "?");
     }
 
     char *body = NULL;
     size_t body_len = 0;
     int status = 0;
-    esp_err_t err = http_request_alloc(HTTP_METHOD_GET, url, NULL, 0, &body, &body_len, &status);
+    http_diag_ctx_t diag_ctx = {0};
+    esp_err_t err = http_frame_get_keepalive(url, if_none_match, &body, &body_len, &status, &diag_ctx);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "GET /frame failed (status=%d, err=%s)", status, esp_err_to_name(err));
         free(body);
         return err;
+    }
+
+    if (diag_ctx.etag[0]) {
+        snprintf(out_frame->etag, sizeof(out_frame->etag), "%s", diag_ctx.etag);
+    } else if (if_none_match && if_none_match[0]) {
+        snprintf(out_frame->etag, sizeof(out_frame->etag), "%s", if_none_match);
+    }
+
+    if (status == 304) {
+        free(body);
+        out_frame->not_modified = true;
+        if (diag_ctx.refresh_seconds_hdr >= 1) {
+            out_frame->refresh_seconds = (uint32_t)diag_ctx.refresh_seconds_hdr;
+        }
+        if (diag_ctx.app_id_hdr[0]) {
+            snprintf(out_frame->app_id, sizeof(out_frame->app_id), "%s", diag_ctx.app_id_hdr);
+        }
+        return ESP_OK;
+    }
+
+    if (!body || body_len == 0) {
+        free(body);
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     json_span_t root = json_root(body, body_len);
@@ -1041,6 +1860,14 @@ esp_err_t api_client_fetch_frame(const char *app_id_override,
         json_as_bool(val, &out_frame->quiet_mode);
     }
 
+    bool frame_is_zlib = false;
+    char comp_str[16] = {0};
+    if (json_obj_get(root, "frame_compression", &val) &&
+        json_as_str(val, comp_str, sizeof(comp_str)) &&
+        strcmp(comp_str, "zlib") == 0) {
+        frame_is_zlib = true;
+    }
+
     const char *b64_ptr = NULL;
     size_t b64_len = 0;
     if (!json_obj_get(root, "frame_b64", &val) || !json_str_inner(val, &b64_ptr, &b64_len) ||
@@ -1050,24 +1877,61 @@ esp_err_t api_client_fetch_frame(const char *app_id_override,
         return ESP_ERR_INVALID_RESPONSE;
     }
 
-    uint8_t *rgb565be = psram_prefer_malloc(CS_FRAME_RGB565_BYTES + 8);
-    if (!rgb565be) {
+    size_t max_raw = (b64_len * 3U) / 4U + 8U;
+    if (max_raw < CS_FRAME_RGB565_BYTES + 8U) {
+        max_raw = CS_FRAME_RGB565_BYTES + 8U;
+    }
+    uint8_t *decoded = psram_prefer_malloc(max_raw);
+    if (!decoded) {
         free(body);
         return ESP_ERR_NO_MEM;
     }
 
     size_t dec_len = 0;
-    int rc = mbedtls_base64_decode(rgb565be, CS_FRAME_RGB565_BYTES + 8, &dec_len,
+    int rc = mbedtls_base64_decode(decoded, max_raw, &dec_len,
                                    (const unsigned char *)b64_ptr, b64_len);
-    if (rc != 0 || dec_len != CS_FRAME_RGB565_BYTES) {
+    if (rc != 0 || dec_len == 0) {
         ESP_LOGW(TAG, "frame_b64 decode failed (rc=%d, len=%u)", rc, (unsigned)dec_len);
-        free(rgb565be);
+        free(decoded);
         free(body);
         return ESP_ERR_INVALID_RESPONSE;
     }
 
-    gfx_rgb565be_to_rgb888(rgb565be, CS_FRAME_PIXELS, out_frame->bg_rgb888);
-    free(rgb565be);
+    if (frame_is_zlib) {
+        tinfl_decompressor *decomp = psram_prefer_malloc(sizeof(tinfl_decompressor));
+        if (!decomp) {
+            free(decoded);
+            free(body);
+            return ESP_ERR_NO_MEM;
+        }
+        tinfl_init(decomp);
+        size_t in_bytes = dec_len;
+        size_t out_bytes = CS_FRAME_RGB565_BYTES;
+        tinfl_status st = tinfl_decompress(
+            decomp,
+            decoded, &in_bytes,
+            out_frame->bg_rgb565be, out_frame->bg_rgb565be, &out_bytes,
+            TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+        free(decomp);
+        if (st != TINFL_STATUS_DONE || out_bytes != CS_FRAME_RGB565_BYTES) {
+            ESP_LOGW(TAG, "frame_b64 zlib decompress failed (st=%d, out=%u, in=%u)",
+                     (int)st, (unsigned)out_bytes, (unsigned)dec_len);
+            free(decoded);
+            free(body);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+    } else {
+        if (dec_len != CS_FRAME_RGB565_BYTES) {
+            ESP_LOGW(TAG, "frame_b64 raw size mismatch (len=%u)", (unsigned)dec_len);
+            free(decoded);
+            free(body);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+        memcpy(out_frame->bg_rgb565be, decoded, CS_FRAME_RGB565_BYTES);
+    }
+
+    free(decoded);
+    gfx_rgb565be_to_rgb888(out_frame->bg_rgb565be, CS_FRAME_PIXELS, out_frame->bg_rgb888);
 
     if (json_obj_get(root, "overlays", &val) && !json_is_null(val)) {
         parse_overlays(val, out_frame);
@@ -1079,6 +1943,15 @@ esp_err_t api_client_fetch_frame(const char *app_id_override,
 
     free(body);
     return ESP_OK;
+}
+
+esp_err_t api_client_fetch_frame(const char *app_id_override,
+                                 const char *screen_override,
+                                 const char *teams_override,
+                                 cs_frame_response_t *out_frame)
+{
+    return api_client_fetch_frame_ex(app_id_override, screen_override, teams_override,
+                                     true, NULL, out_frame);
 }
 
 void api_client_free_alert(cs_alert_t *alert)
