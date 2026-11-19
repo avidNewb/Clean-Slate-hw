@@ -7,6 +7,8 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "sntp_time";
 
@@ -39,6 +41,59 @@ static const tz_map_entry_t s_tz_map[] = {
 static bool s_sntp_started = false;
 static char s_current_tz[64] = {0};
 static char s_ntp_server[64] = CONFIG_CS_NTP_SERVER;
+static portMUX_TYPE s_tz_init_mux = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_tz_mutex = NULL;
+
+static void tz_lock(void)
+{
+    if (!s_tz_mutex) {
+        SemaphoreHandle_t m = xSemaphoreCreateMutex();
+        if (m) {
+            portENTER_CRITICAL(&s_tz_init_mux);
+            if (!s_tz_mutex) {
+                s_tz_mutex = m;
+                m = NULL;
+            }
+            portEXIT_CRITICAL(&s_tz_init_mux);
+            if (m) {
+                vSemaphoreDelete(m);
+            }
+        }
+    }
+    if (s_tz_mutex) {
+        xSemaphoreTake(s_tz_mutex, portMAX_DELAY);
+    }
+}
+
+static void tz_unlock(void)
+{
+    if (s_tz_mutex) {
+        xSemaphoreGive(s_tz_mutex);
+    }
+}
+
+static void safe_localtime(time_t now, struct tm *out_tm)
+{
+    tz_lock();
+    localtime_r(&now, out_tm);
+    tz_unlock();
+}
+
+static bool looks_like_posix_tz(const char *s)
+{
+    if (!s || !*s) {
+        return false;
+    }
+    /* Every valid POSIX TZ rule (e.g. "UTC0", "JST-9", "GMT0BST,M3.5.0/1,M10.5.0",
+     * "AEST-10AEDT,M10.1.0,M4.1.0/3") contains an offset digit, whereas IANA names
+     * (e.g. "America/Chicago", "Asia/Tokyo") do not (except Etc/GMT+N which is also handled). */
+    for (const char *p = s; *p; p++) {
+        if (*p >= '0' && *p <= '9') {
+            return true;
+        }
+    }
+    return false;
+}
 
 static const char *resolve_posix_tz(const char *iana_or_posix)
 {
@@ -50,8 +105,7 @@ static const char *resolve_posix_tz(const char *iana_or_posix)
             return s_tz_map[i].posix_tz;
         }
     }
-    // If it has no '/' it is likely already a POSIX TZ string (e.g. "CST6CDT")
-    if (strchr(iana_or_posix, '/') == NULL) {
+    if (looks_like_posix_tz(iana_or_posix) && strncasecmp(iana_or_posix, "Etc/", 4) != 0) {
         return iana_or_posix;
     }
     ESP_LOGW(TAG, "Unknown IANA timezone '%s', falling back to UTC0", iana_or_posix);
@@ -61,14 +115,19 @@ static const char *resolve_posix_tz(const char *iana_or_posix)
 void sntp_time_set_timezone(const char *iana_or_posix_tz)
 {
     const char *posix_tz = resolve_posix_tz(iana_or_posix_tz);
+    tz_lock();
     if (strcmp(s_current_tz, posix_tz) == 0) {
+        tz_unlock();
         return;
     }
     snprintf(s_current_tz, sizeof(s_current_tz), "%s", posix_tz);
     setenv("TZ", s_current_tz, 1);
     tzset();
+    char applied[64];
+    snprintf(applied, sizeof(applied), "%s", s_current_tz);
+    tz_unlock();
     ESP_LOGI(TAG, "Timezone set to %s (%s)",
-             iana_or_posix_tz ? iana_or_posix_tz : "", s_current_tz);
+             iana_or_posix_tz ? iana_or_posix_tz : "", applied);
 }
 
 void sntp_time_set_server(const char *ntp_server)
@@ -108,7 +167,7 @@ bool sntp_time_is_synced(void)
 {
     time_t now = time(NULL);
     struct tm tm_info = {0};
-    localtime_r(&now, &tm_info);
+    safe_localtime(now, &tm_info);
     return tm_info.tm_year >= (2024 - 1900);
 }
 
@@ -123,7 +182,7 @@ void sntp_time_format_clock(const char *fmt, char *out, size_t out_cap)
     }
     time_t now = time(NULL);
     struct tm tm_info = {0};
-    localtime_r(&now, &tm_info);
+    safe_localtime(now, &tm_info);
 
     const char *f = (fmt && *fmt) ? fmt : "%I:%M";
     bool is_24 = (strstr(f, "%H") != NULL);
@@ -173,7 +232,7 @@ void sntp_time_format_date(char *out, size_t out_cap)
     }
     time_t now = time(NULL);
     struct tm tm_info = {0};
-    localtime_r(&now, &tm_info);
+    safe_localtime(now, &tm_info);
     int wday = (tm_info.tm_wday >= 0 && tm_info.tm_wday < 7) ? tm_info.tm_wday : 0;
     int mon = (tm_info.tm_mon >= 0 && tm_info.tm_mon < 12) ? tm_info.tm_mon : 0;
     snprintf(out, out_cap, "%s %s %02d", s_days[wday], s_mons[mon], tm_info.tm_mday);
@@ -232,7 +291,7 @@ bool sntp_time_in_quiet_hours(bool enabled, const char *start_hhmm, const char *
     }
     time_t now = time(NULL);
     struct tm tm_info = {0};
-    localtime_r(&now, &tm_info);
+    safe_localtime(now, &tm_info);
     int cur_m = tm_info.tm_hour * 60 + tm_info.tm_min;
     if (start_m < end_m) {
         return cur_m >= start_m && cur_m < end_m;

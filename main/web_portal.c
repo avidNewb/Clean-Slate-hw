@@ -434,8 +434,21 @@ static esp_err_t handle_get_status(httpd_req_t *req)
     return res;
 }
 
+static char *s_scan_cache_json = NULL;
+static int64_t s_scan_cache_at_us = 0;
+
+static bool req_wants_fresh(httpd_req_t *req);
+
 static esp_err_t handle_get_scan(httpd_req_t *req)
 {
+    bool force_fresh = req_wants_fresh(req);
+    int64_t now_us = esp_timer_get_time();
+    if (!force_fresh && s_scan_cache_json && (now_us - s_scan_cache_at_us) < 15000000LL) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        return httpd_resp_send(req, s_scan_cache_json, (ssize_t)strlen(s_scan_cache_json));
+    }
+
     wifi_scan_entry_t *entries = calloc(16, sizeof(wifi_scan_entry_t));
     if (!entries) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
@@ -472,6 +485,10 @@ static esp_err_t handle_get_scan(httpd_req_t *req)
     pos = append_json_fmt(out, cap, pos, "]");
 
     free(entries);
+    free(s_scan_cache_json);
+    s_scan_cache_json = strdup(out);
+    s_scan_cache_at_us = esp_timer_get_time();
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     esp_err_t res = httpd_resp_send(req, out, (ssize_t)strlen(out));

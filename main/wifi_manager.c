@@ -25,7 +25,7 @@
 static const char *TAG = "wifi_mgr";
 
 #define WIFI_CONNECTED_BIT BIT0
-#define STA_FAILS_BEFORE_FALLBACK_AP 5
+#define STA_FAILS_BEFORE_FALLBACK_AP 10
 
 static EventGroupHandle_t s_wifi_events = NULL;
 static esp_timer_handle_t s_reconnect_timer = NULL;

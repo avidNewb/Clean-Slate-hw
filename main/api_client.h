@@ -80,6 +80,7 @@ typedef struct {
     char quiet_start[8];
     char quiet_end[8];
     char timezone[48];
+    char posix_tz[64];
     int brightness_override; /* -1 when null/unset, else 0..255 */
 } cs_device_config_t;
 

@@ -2331,7 +2331,7 @@ static void api_task(void *arg)
                     new_cfg.active_event_holidays = hol_act;
                 }
                 last_cfg_us = now_us;
-                sntp_time_set_timezone(new_cfg.timezone);
+                sntp_time_set_timezone(new_cfg.posix_tz[0] ? new_cfg.posix_tz : new_cfg.timezone);
                 settings_store_get(&local);
                 /* Local NVS owns brightness mode (cloud /config cannot clear override back to Auto/null). */
                 new_cfg.brightness_override = local.brightness_override;

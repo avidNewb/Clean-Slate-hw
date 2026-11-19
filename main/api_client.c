@@ -13,6 +13,8 @@
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_tls.h"
@@ -22,6 +24,7 @@
 #include "lwip/sockets.h"
 #include "mbedtls/base64.h"
 #include "miniz.h"
+#include "psa/crypto.h"
 
 #include "json_min.h"
 #include "settings_store.h"
@@ -1089,6 +1092,9 @@ esp_err_t api_client_fetch_config(cs_device_config_t *out_cfg)
         if (json_obj_get(val, "timezone", &qv)) {
             json_as_str(qv, out_cfg->timezone, sizeof(out_cfg->timezone));
         }
+        if (json_obj_get(val, "posix_tz", &qv) && !json_is_null(qv)) {
+            json_as_str(qv, out_cfg->posix_tz, sizeof(out_cfg->posix_tz));
+        }
     }
 
     if (json_obj_get(root, "brightness_override", &val) && !json_is_null(val)) {
@@ -2134,6 +2140,70 @@ bool api_client_consume_ota_reboot_flag(void)
     return is_ota;
 }
 
+static bool verify_partition_sha256_hex(const esp_partition_t *part,
+                                        size_t image_len,
+                                        const char *expected_hex)
+{
+    if (!part || image_len == 0 || !expected_hex || strlen(expected_hex) != 64U) {
+        return false;
+    }
+    uint8_t *buf = psram_prefer_malloc(4096);
+    if (!buf) {
+        return false;
+    }
+    psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
+    psa_status_t pst = psa_hash_setup(&op, PSA_ALG_SHA_256);
+    if (pst != PSA_SUCCESS) {
+        free(buf);
+        return false;
+    }
+
+    size_t offset = 0;
+    bool io_ok = true;
+    while (offset < image_len) {
+        size_t chunk = image_len - offset;
+        if (chunk > 4096U) {
+            chunk = 4096U;
+        }
+        if (esp_partition_read(part, offset, buf, chunk) != ESP_OK) {
+            io_ok = false;
+            break;
+        }
+        if (psa_hash_update(&op, buf, chunk) != PSA_SUCCESS) {
+            io_ok = false;
+            break;
+        }
+        offset += chunk;
+    }
+    free(buf);
+
+    uint8_t digest[32] = {0};
+    size_t digest_len = 0;
+    if (!io_ok || psa_hash_finish(&op, digest, sizeof(digest), &digest_len) != PSA_SUCCESS ||
+        digest_len != 32U) {
+        psa_hash_abort(&op);
+        return false;
+    }
+
+    char actual_hex[65];
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < 32U; i++) {
+        actual_hex[i * 2U] = hex[(digest[i] >> 4) & 0x0FU];
+        actual_hex[i * 2U + 1U] = hex[digest[i] & 0x0FU];
+    }
+    actual_hex[64] = '\0';
+
+    bool match = (strcasecmp(actual_hex, expected_hex) == 0);
+    if (!match) {
+        ESP_LOGE(TAG, "OTA SHA-256 mismatch! expected=%.16s... actual=%.16s...",
+                 expected_hex, actual_hex);
+    } else {
+        ESP_LOGI(TAG, "OTA SHA-256 verified (%u bytes, %.16s...)",
+                 (unsigned)image_len, actual_hex);
+    }
+    return match;
+}
+
 esp_err_t api_client_check_and_run_ota(const char *current_version,
                                        bool *update_avail_out,
                                        char *detail_out,
@@ -2198,6 +2268,11 @@ esp_err_t api_client_check_and_run_ota(const char *current_version,
         return ESP_OK;
     }
 
+    char expected_sha256[65] = {0};
+    if (json_obj_get(root, "sha256", &fv) && !json_is_null(fv)) {
+        json_as_str(fv, expected_sha256, sizeof(expected_sha256));
+    }
+
     char dl_path[192] = {0};
     if (json_obj_get(root, "download_url", &fv)) {
         json_as_str(fv, dl_path, sizeof(dl_path));
@@ -2235,14 +2310,49 @@ esp_err_t api_client_check_and_run_ota(const char *current_version,
         .http_config = &http_cfg,
     };
 
-    err = esp_https_ota(&ota_cfg);
+    const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);
+    esp_https_ota_handle_t ota_handle = NULL;
+    err = esp_https_ota_begin(&ota_cfg, &ota_handle);
+    if (err == ESP_OK) {
+        while (true) {
+            err = esp_https_ota_perform(ota_handle);
+            if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+                break;
+            }
+        }
+        if (err == ESP_OK && esp_https_ota_is_complete_data_received(ota_handle)) {
+            int img_len = esp_https_ota_get_image_len_read(ota_handle);
+            bool hash_ok = true;
+            if (strlen(expected_sha256) == 64U) {
+                hash_ok = (update_part != NULL && img_len > 0 &&
+                           verify_partition_sha256_hex(update_part, (size_t)img_len, expected_sha256));
+            } else {
+                ESP_LOGW(TAG, "OTA server omitted sha256; proceeding without hash check");
+            }
+            if (!hash_ok) {
+                esp_https_ota_abort(ota_handle);
+                err = ESP_ERR_INVALID_CRC;
+                if (detail_out && detail_cap > 0) {
+                    snprintf(detail_out, detail_cap, "SHA-256 mismatch");
+                }
+            } else {
+                err = esp_https_ota_finish(ota_handle);
+            }
+        } else {
+            esp_https_ota_abort(ota_handle);
+            if (err == ESP_OK) {
+                err = ESP_FAIL;
+            }
+        }
+    }
+
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "OTA update succeeded, restarting...");
         s_ota_reboot_magic = OTA_REBOOT_MAGIC;
         esp_restart();
     } else {
         ESP_LOGE(TAG, "OTA update failed: %s", esp_err_to_name(err));
-        if (detail_out && detail_cap > 0) {
+        if (detail_out && detail_cap > 0 && !detail_out[0]) {
             snprintf(detail_out, detail_cap, "%s", esp_err_to_name(err));
         }
     }
