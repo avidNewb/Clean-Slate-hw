@@ -16,6 +16,7 @@
 #include "sdkconfig.h"
 
 #include "api_client.h"
+#include "gfx_font.h"
 #include "hub75_driver.h"
 #include "json_min.h"
 #include "peripherals.h"
@@ -283,6 +284,8 @@ static esp_err_t handle_get_status(httpd_req_t *req)
 
     char active_app[64] = "clock";
     char pinned_app[64] = "";
+    char temp_app[64] = "";
+    uint32_t temp_remaining_sec = 0;
     char apps_arr[1024] = "[]";
     char ota_state[24] = "idle";
     char ota_detail[64] = "";
@@ -296,6 +299,9 @@ static esp_err_t handle_get_status(httpd_req_t *req)
                                    pinned_app, sizeof(pinned_app),
                                    apps_arr, sizeof(apps_arr),
                                    &brightness, &quiet_mode);
+    }
+    if (s_hooks.get_temp_override) {
+        s_hooks.get_temp_override(temp_app, sizeof(temp_app), &temp_remaining_sec);
     }
     if (s_hooks.get_ota_status) {
         s_hooks.get_ota_status(ota_state, sizeof(ota_state),
@@ -350,6 +356,10 @@ static esp_err_t handle_get_status(httpd_req_t *req)
     pos = append_json_str(out, cap, pos, active_app);
     pos = append_json_fmt(out, cap, pos, ",\"pinned_app\":");
     pos = append_json_str(out, cap, pos, pinned_app);
+    pos = append_json_fmt(out, cap, pos, ",\"temp_app\":");
+    pos = append_json_str(out, cap, pos, temp_app);
+    pos = append_json_fmt(out, cap, pos, ",\"temp_remaining_sec\":%lu",
+                          (unsigned long)temp_remaining_sec);
     pos = append_json_fmt(out, cap, pos,
                           ",\"available_apps\":%s,\"active_events\":{\"known\":%s,\"birthdays\":%s,\"holidays\":%s},\"alarm_ringing\":%s,\"quiet_mode\":%s,\"brightness\":%u,\"ambient_raw\":%d,\"ota_status\":",
                           apps_arr,
@@ -384,6 +394,14 @@ static esp_err_t handle_get_status(httpd_req_t *req)
     pos = append_json_fmt(out, cap, pos, ",\"detail\":");
     pos = append_json_str(out, cap, pos, api_st.detail);
     pos = append_json_fmt(out, cap, pos, "}");
+
+    bool admin_unlocked = (s_hooks.is_admin_unlocked && s_hooks.is_admin_unlocked());
+    bool admin_pin_active = (s_hooks.is_admin_pin_active && s_hooks.is_admin_pin_active());
+    pos = append_json_fmt(out, cap, pos,
+                          ",\"has_device_token\":%s,\"admin_unlocked\":%s,\"admin_pin_active\":%s",
+                          cfg.device_token[0] ? "true" : "false",
+                          admin_unlocked ? "true" : "false",
+                          admin_pin_active ? "true" : "false");
 
     pos = append_json_fmt(out, cap, pos, ",\"settings\":{\"wifi_ssid\":");
     pos = append_json_str(out, cap, pos, cfg.wifi_ssid);
@@ -537,6 +555,9 @@ static esp_err_t handle_post_setup(httpd_req_t *req)
         json_as_str(fv, cfg.api_base_url, sizeof(cfg.api_base_url));
     }
     trim_url(cfg.api_base_url);
+    if (cfg.api_base_url[0] == '\0') {
+        snprintf(cfg.api_base_url, sizeof(cfg.api_base_url), "%s", CONFIG_CS_API_BASE_URL);
+    }
     cfg.cloud_sync_pending = true;
     free(body);
 
@@ -599,8 +620,22 @@ static esp_err_t handle_post_settings(httpd_req_t *req)
         sanitize_teams_csv(cfg.favorite_teams);
     }
     if (json_obj_get(root, "api_base_url", &fv)) {
-        json_as_str(fv, cfg.api_base_url, sizeof(cfg.api_base_url));
-        trim_url(cfg.api_base_url);
+        char req_url[sizeof(cfg.api_base_url)] = {0};
+        json_as_str(fv, req_url, sizeof(req_url));
+        trim_url(req_url);
+        if (req_url[0] == '\0') {
+            snprintf(req_url, sizeof(req_url), "%s", CONFIG_CS_API_BASE_URL);
+        }
+        if (strcmp(req_url, cfg.api_base_url) != 0 &&
+            !(wifi_manager_is_ap_mode() && !wifi_manager_is_connected()) &&
+            !(s_hooks.is_admin_unlocked && s_hooks.is_admin_unlocked())) {
+            free(body);
+            httpd_resp_set_status(req, "403 Forbidden");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+            return httpd_resp_sendstr(req, "{\"error\":\"admin_pin_required\"}");
+        }
+        snprintf(cfg.api_base_url, sizeof(cfg.api_base_url), "%s", req_url);
     }
     if (json_obj_get(root, "timezone", &fv)) {
         json_as_str(fv, cfg.timezone, sizeof(cfg.timezone));
@@ -725,6 +760,7 @@ static esp_err_t handle_post_settings(httpd_req_t *req)
         }
         if (enabled_apps_raw || (alarm_obj.ptr && alarm_obj.len >= 2)) {
             cs_alarm_schedule_t local_alarms;
+            settings_store_clear_all_pending_alarm_deletes();
             settings_store_parse_alarms_json(alarm_en, alarm_obj.ptr, alarm_obj.len, &local_alarms);
             settings_store_save_alarms(&local_alarms);
         }
@@ -828,6 +864,15 @@ static esp_err_t handle_get_cloud_config(httpd_req_t *req)
     return res;
 }
 
+static void render_redacted_pin_preview(uint8_t *fb)
+{
+    memset(fb, 0, CS_FRAME_RGB888_BYTES);
+    gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                          32, 6, "PIN HIDDEN", GFX_FONT_3X5, GFX_ALIGN_CENTER, 255, 190, 60);
+    gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                          32, 18, "CHECK CLOCK", GFX_FONT_3X5, GFX_ALIGN_CENTER, 140, 200, 255);
+}
+
 static esp_err_t handle_get_frame(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
@@ -836,12 +881,20 @@ static esp_err_t handle_get_frame(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_ERR_NO_MEM;
     }
-    esp_err_t err = hub75_get_frame_rgb888(fb);
-    if (err != ESP_OK) {
-        free(fb);
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        httpd_resp_sendstr(req, "Display not ready");
-        return err;
+    if (s_hooks.is_admin_pin_active && s_hooks.is_admin_pin_active()) {
+        render_redacted_pin_preview(fb);
+    } else {
+        esp_err_t err = hub75_get_frame_rgb888(fb);
+        if (err != ESP_OK) {
+            free(fb);
+            httpd_resp_set_status(req, "503 Service Unavailable");
+            httpd_resp_sendstr(req, "Display not ready");
+            return err;
+        }
+        /* Re-check after copying so a PIN triggered mid-copy can never leak */
+        if (s_hooks.is_admin_pin_active && s_hooks.is_admin_pin_active()) {
+            render_redacted_pin_preview(fb);
+        }
     }
     httpd_resp_set_type(req, "application/octet-stream");
     esp_err_t res = httpd_resp_send(req, (const char *)fb, CS_FRAME_RGB888_BYTES);
@@ -865,6 +918,7 @@ static esp_err_t handle_post_action(httpd_req_t *req)
     int64_t vol_arg = -1;
     int64_t bright_arg = -2;
     int64_t delta_arg = 1;
+    int64_t dur_arg = 180;
     json_span_t root = json_root(body, body_len);
     json_span_t fv;
     if (json_obj_get(root, "action", &fv)) {
@@ -886,6 +940,9 @@ static esp_err_t handle_post_action(httpd_req_t *req)
     }
     if (json_obj_get(root, "delta", &fv)) {
         json_as_int(fv, &delta_arg);
+    }
+    if (json_obj_get(root, "duration_sec", &fv)) {
+        json_as_int(fv, &dur_arg);
     }
     free(body);
 
@@ -919,6 +976,21 @@ static esp_err_t handle_post_action(httpd_req_t *req)
         if (s_hooks.on_set_pinned_app) {
             s_hooks.on_set_pinned_app(slot_key);
         }
+    } else if (strcmp(action, "show_temp_app") == 0 && app_arg[0] != '\0') {
+        char slot_key[64] = {0};
+        if (screen_arg[0] != '\0' && strchr(app_arg, ':') == NULL) {
+            snprintf(slot_key, sizeof(slot_key), "%s:%s", app_arg, screen_arg);
+        } else {
+            snprintf(slot_key, sizeof(slot_key), "%s", app_arg);
+        }
+        if (dur_arg < 15) {
+            dur_arg = 15;
+        } else if (dur_arg > 3600) {
+            dur_arg = 3600;
+        }
+        if (s_hooks.on_show_temp_app) {
+            s_hooks.on_show_temp_app(slot_key, (uint32_t)dur_arg);
+        }
     } else if (strcmp(action, "set_brightness") == 0 && bright_arg >= -1 && bright_arg <= 255) {
         cs_local_settings_t cfg;
         settings_store_get(&cfg);
@@ -948,9 +1020,23 @@ static esp_err_t handle_post_action(httpd_req_t *req)
     } else if (strcmp(action, "reboot") == 0) {
         schedule_deferred(DEFER_REBOOT, 400);
     } else if (strcmp(action, "reset_wifi") == 0) {
+        if (!(wifi_manager_is_ap_mode() && !wifi_manager_is_connected()) &&
+            !(s_hooks.is_admin_unlocked && s_hooks.is_admin_unlocked())) {
+            httpd_resp_set_status(req, "403 Forbidden");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+            return httpd_resp_sendstr(req, "{\"error\":\"admin_pin_required\"}");
+        }
         settings_store_clear_wifi();
         schedule_deferred(DEFER_ENTER_SETUP, 400);
     } else if (strcmp(action, "factory_reset") == 0) {
+        if (!(wifi_manager_is_ap_mode() && !wifi_manager_is_connected()) &&
+            !(s_hooks.is_admin_unlocked && s_hooks.is_admin_unlocked())) {
+            httpd_resp_set_status(req, "403 Forbidden");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+            return httpd_resp_sendstr(req, "{\"error\":\"admin_pin_required\"}");
+        }
         schedule_deferred(DEFER_FACTORY_RESET, 400);
     } else {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown action");
@@ -1049,6 +1135,43 @@ static esp_err_t handle_post_test_server(httpd_req_t *req)
     return res;
 }
 
+static esp_err_t handle_post_admin_pin_request(httpd_req_t *req)
+{
+    if (s_hooks.on_request_admin_pin) {
+        s_hooks.on_request_admin_pin();
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(req, "{\"ok\":true,\"ttl_sec\":60}");
+}
+
+static esp_err_t handle_post_admin_pin_verify(httpd_req_t *req)
+{
+    char *body = NULL;
+    size_t body_len = 0;
+    esp_err_t err = read_req_body(req, 256, &body, &body_len);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
+        return err;
+    }
+    char pin[12] = {0};
+    json_span_t root = json_root(body, body_len);
+    json_span_t fv;
+    if (json_obj_get(root, "pin", &fv)) {
+        json_as_str(fv, pin, sizeof(pin));
+    }
+    free(body);
+
+    bool ok = (s_hooks.on_verify_admin_pin && s_hooks.on_verify_admin_pin(pin));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    if (!ok) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"invalid_pin\"}");
+    }
+    return httpd_resp_sendstr(req, "{\"ok\":true,\"unlocked_sec\":300}");
+}
+
 esp_err_t web_portal_start(const web_portal_hooks_t *hooks)
 {
     if (s_server) {
@@ -1060,7 +1183,7 @@ esp_err_t web_portal_start(const web_portal_hooks_t *hooks)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 12288;
-    config.max_uri_handlers = 18;
+    config.max_uri_handlers = 20;
     config.max_open_sockets = 6;
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 15;
@@ -1084,6 +1207,8 @@ esp_err_t web_portal_start(const web_portal_hooks_t *hooks)
         { .uri = "/api/local/cloud-config", .method = HTTP_GET,  .handler = handle_get_cloud_config },
         { .uri = "/api/local/action",       .method = HTTP_POST, .handler = handle_post_action },
         { .uri = "/api/local/test-server",  .method = HTTP_POST, .handler = handle_post_test_server },
+        { .uri = "/api/local/admin-pin/request", .method = HTTP_POST, .handler = handle_post_admin_pin_request },
+        { .uri = "/api/local/admin-pin/verify",  .method = HTTP_POST, .handler = handle_post_admin_pin_verify },
     };
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {

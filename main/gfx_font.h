@@ -34,6 +34,25 @@ void gfx_draw_text_aligned(uint8_t *fb_rgb888, int width, int height,
                            uint8_t r, uint8_t g, uint8_t b);
 
 /**
+ * Draw crisp bitmap text clipped vertically to [clip_y0, clip_y1] (inclusive).
+ */
+void gfx_draw_text_clipped_y(uint8_t *fb_rgb888, int width, int height,
+                             int x, int y, const char *text,
+                             gfx_font_id_t font, gfx_align_t align,
+                             uint8_t r, uint8_t g, uint8_t b,
+                             int clip_y0, int clip_y1);
+
+/**
+ * Draw vertically sub-pixel blended bitmap text (y_subpx in quarter-pixels, 1px = 4)
+ * clipped to [clip_y0, clip_y1] for butter-smooth vertical scrolling on 8-bit HUB75.
+ */
+void gfx_draw_text_subpixel_y(uint8_t *fb_rgb888, int width, int height,
+                              int x, int y_subpx, const char *text,
+                              gfx_font_id_t font, gfx_align_t align,
+                              uint8_t r, uint8_t g, uint8_t b,
+                              int clip_y0, int clip_y1);
+
+/**
  * Convenience wrapper for left-aligned 5x7 text (used by local status banners).
  */
 void gfx_draw_text(uint8_t *fb_rgb888, int width, int height,

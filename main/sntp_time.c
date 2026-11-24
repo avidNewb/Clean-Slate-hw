@@ -1,5 +1,6 @@
 #include "sntp_time.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -238,7 +239,7 @@ void sntp_time_format_date(char *out, size_t out_cap)
     snprintf(out, out_cap, "%s %s %02d", s_days[wday], s_mons[mon], tm_info.tm_mday);
 }
 
-void sntp_time_format_countdown(int64_t target_epoch, char *out, size_t out_cap)
+void sntp_time_format_countdown(int64_t target_epoch, const char *fmt, char *out, size_t out_cap)
 {
     if (!out || out_cap == 0) {
         return;
@@ -247,9 +248,41 @@ void sntp_time_format_countdown(int64_t target_epoch, char *out, size_t out_cap)
         snprintf(out, out_cap, "PREGAME");
         return;
     }
+
+    char prefix[12] = "KICK";
+    if (fmt && fmt[0]) {
+        const char *pct = strchr(fmt, '%');
+        if (pct && pct > fmt) {
+            const char *start = fmt;
+            while (start < pct && isspace((unsigned char)*start)) {
+                start++;
+            }
+            const char *end = pct;
+            while (end > start && isspace((unsigned char)*(end - 1))) {
+                end--;
+            }
+            size_t len = (size_t)(end - start);
+            if (len > 0) {
+                if (len >= sizeof(prefix)) {
+                    len = sizeof(prefix) - 1;
+                }
+                for (size_t i = 0; i < len; i++) {
+                    prefix[i] = (char)toupper((unsigned char)start[i]);
+                }
+                prefix[len] = '\0';
+            }
+        }
+    }
+
     long rem = (long)target_epoch - (long)time(NULL);
     if (rem <= 0) {
-        snprintf(out, out_cap, "KICKOFF SOON");
+        if (strcmp(prefix, "TIP") == 0) {
+            snprintf(out, out_cap, "TIPOFF SOON");
+        } else if (strcmp(prefix, "KICK") == 0) {
+            snprintf(out, out_cap, "KICKOFF SOON");
+        } else {
+            snprintf(out, out_cap, "%s SOON", prefix);
+        }
         return;
     }
     long d = rem / 86400;
@@ -258,11 +291,11 @@ void sntp_time_format_countdown(int64_t target_epoch, char *out, size_t out_cap)
     long s = rem % 60;
 
     if (d > 0) {
-        snprintf(out, out_cap, "KICK %ldD %02ldH %02ldM", d, h, m);
+        snprintf(out, out_cap, "%s %ldD %02ldH %02ldM", prefix, d, h, m);
     } else if (h > 0) {
-        snprintf(out, out_cap, "KICK %02ldH %02ldM %02ldS", h, m, s);
+        snprintf(out, out_cap, "%s %02ldH %02ldM %02ldS", prefix, h, m, s);
     } else {
-        snprintf(out, out_cap, "KICK %02ldM %02ldS", m, s);
+        snprintf(out, out_cap, "%s %02ldM %02ldS", prefix, m, s);
     }
 }
 

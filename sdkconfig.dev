@@ -1,0 +1,3 @@
+# Optional local LAN development override:
+# idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y

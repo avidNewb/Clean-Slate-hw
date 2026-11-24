@@ -38,6 +38,7 @@ typedef struct {
     uint8_t third_folder;      /* 0 = global DFPlayer track index, 1..99 = folder */
     uint16_t third_track;      /* Default 3 */
     char pinned_app[64];       /* Empty = Auto schedule, else pinned app_id or app_id:screen_id */
+    char device_token[72];     /* Per-device bearer token enrolled from cloud server (NVS key "dev_tok") */
     bool cloud_sync_pending;
 } cs_local_settings_t;
 
@@ -71,11 +72,25 @@ esp_err_t settings_store_clear_wifi(void);
  */
 bool settings_store_has_wifi(void);
 
+/**
+ * Copy current enrolled device bearer token into out (empty if not yet enrolled).
+ */
+void settings_store_get_device_token(char *out, size_t out_cap);
+
+/**
+ * Update and persist only the enrolled device bearer token (empty string clears it).
+ */
+esp_err_t settings_store_set_device_token(const char *token);
+
 #define CS_MAX_LOCAL_ALARMS 8
+
+#define CS_ALARM_POST_NONE 0U
+#define CS_ALARM_POST_BIBLE_VOTD 1U
+#define CS_ALARM_POST_BIBLE_VOTD_GENTLE 2U
 
 typedef struct {
     bool enabled;
-    bool repeat;         /* false = one-time alarm (auto-deletes after ringing); true = repeat on days_mask */
+    bool repeat;         /* false = one-time alarm (auto-disables after ringing); true = repeat on days_mask */
     uint8_t hour;        /* 0..23 */
     uint8_t minute;      /* 0..59 */
     uint8_t days_mask;   /* bit 0=Sun .. 6=Sat (matches tm_wday); only used when repeat==true */
@@ -84,6 +99,8 @@ typedef struct {
     uint8_t theme_id;    /* 0=sunrise, 1=digital_pulse, 2=siren_strobe, 3=gentle_chime */
     char id[25];         /* Alarm ID matching cloud config (e.g. "alarm_1") */
     char label[25];      /* Short uppercase label, e.g. "WAKE UP!" */
+    uint8_t post_action; /* CS_ALARM_POST_* */
+    uint8_t post_minutes;/* 1..60, default 5 */
 } cs_alarm_item_t;
 
 typedef struct {
@@ -114,9 +131,14 @@ esp_err_t settings_store_save_alarms(const cs_alarm_schedule_t *in);
 esp_err_t settings_store_consume_onetime_alarm(const char *alarm_id);
 
 /**
- * Remove an alarm ID from the pending cloud-delete queue after cloud DELETE succeeds.
+ * Remove an alarm ID from the pending cloud-sync queue after cloud sync succeeds.
  */
 esp_err_t settings_store_clear_pending_alarm_delete(const char *alarm_id);
+
+/**
+ * Clear all pending cloud alarm-disable sync entries (called when user explicitly saves alarms).
+ */
+esp_err_t settings_store_clear_all_pending_alarm_deletes(void);
 
 /**
  * Parse a JSON object for `app_settings.alarm` (supporting both multi-alarm `alarms`

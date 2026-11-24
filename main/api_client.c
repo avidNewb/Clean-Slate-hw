@@ -243,6 +243,15 @@ static cs_overlay_type_t parse_overlay_type(const char *s)
     if (strcmp(s, "text") == 0) {
         return CS_OVERLAY_TEXT;
     }
+    if (strcmp(s, "paged_text") == 0) {
+        return CS_OVERLAY_PAGED_TEXT;
+    }
+    if (strcmp(s, "scroll_text") == 0) {
+        return CS_OVERLAY_SCROLL_TEXT;
+    }
+    if (strcmp(s, "scroll_up") == 0) {
+        return CS_OVERLAY_SCROLL_UP;
+    }
     return CS_OVERLAY_NONE;
 }
 
@@ -255,6 +264,7 @@ typedef struct {
     char app_id_hdr[32];
     int refresh_seconds_hdr;
     bool conn_close;
+    bool invalid_auth_token;
 } http_diag_ctx_t;
 
 static http_diag_ctx_t s_frame_diag_ctx = {0};
@@ -318,9 +328,26 @@ static esp_err_t http_diag_event_handler(esp_http_client_event_t *evt)
             if (strcasecmp(evt->header_value, "close") == 0) {
                 ctx->conn_close = true;
             }
+        } else if (strcasecmp(evt->header_key, "x-cleanslate-auth") == 0) {
+            if (strcasecmp(evt->header_value, "invalid-token") == 0) {
+                ctx->invalid_auth_token = true;
+            }
         }
     }
     return ESP_OK;
+}
+
+static void attach_device_auth_header(esp_http_client_handle_t client)
+{
+    char tok[72] = {0};
+    settings_store_get_device_token(tok, sizeof(tok));
+    if (tok[0]) {
+        char auth_hdr[84];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", tok);
+        esp_http_client_set_header(client, "Authorization", auth_hdr);
+    } else {
+        esp_http_client_delete_header(client, "Authorization");
+    }
 }
 
 static void record_api_telemetry(const char *url,
@@ -332,6 +359,10 @@ static void record_api_telemetry(const char *url,
 {
     int64_t now_us = esp_timer_get_time();
     bool ok = (err == ESP_OK && ((status >= 200 && status < 300) || status == 304));
+    if (status == 401 && ctx && ctx->invalid_auth_token) {
+        ESP_LOGW(TAG, "Server rejected device bearer token (revoked/invalid); clearing NVS dev_tok for re-enroll");
+        settings_store_set_device_token("");
+    }
 
     char ep[48];
     extract_endpoint_label(url, ep, sizeof(ep));
@@ -424,6 +455,7 @@ static esp_err_t http_request_alloc_once(esp_http_client_method_t method,
 
     esp_http_client_set_header(client, "User-Agent", "CleanSlate-ESP32/" CONFIG_CS_FIRMWARE_VERSION);
     esp_http_client_set_header(client, "X-Firmware-Version", CONFIG_CS_FIRMWARE_VERSION);
+    attach_device_auth_header(client);
     if (post_body && post_len > 0) {
         esp_http_client_set_header(client, "Content-Type", "application/json");
     }
@@ -635,6 +667,8 @@ static void extract_url_origin(const char *url, char *out, size_t cap)
     out[len] = '\0';
 }
 
+static int64_t s_frame_http_last_use_us = 0;
+
 static void frame_http_reset_locked(void)
 {
     if (s_frame_http_client) {
@@ -643,6 +677,7 @@ static void frame_http_reset_locked(void)
         s_frame_http_client = NULL;
     }
     s_frame_http_origin[0] = '\0';
+    s_frame_http_last_use_us = 0;
 }
 
 static esp_err_t http_frame_get_keepalive(const char *url,
@@ -685,7 +720,10 @@ static esp_err_t http_frame_get_keepalive(const char *url,
 
     for (int attempt = 0; attempt < 2; attempt++) {
         bool reused = false;
-        if (s_frame_http_client && strcmp(s_frame_http_origin, origin) != 0) {
+        if (s_frame_http_client &&
+            (strcmp(s_frame_http_origin, origin) != 0 ||
+             (s_frame_http_last_use_us > 0 &&
+              (esp_timer_get_time() - s_frame_http_last_use_us) >= 45000000LL))) {
             frame_http_reset_locked();
         }
         if (!s_frame_http_client) {
@@ -721,6 +759,7 @@ static esp_err_t http_frame_get_keepalive(const char *url,
                                    "CleanSlate-ESP32/" CONFIG_CS_FIRMWARE_VERSION);
         esp_http_client_set_header(s_frame_http_client, "X-Firmware-Version",
                                    CONFIG_CS_FIRMWARE_VERSION);
+        attach_device_auth_header(s_frame_http_client);
         if (if_none_match && if_none_match[0]) {
             esp_http_client_set_header(s_frame_http_client, "If-None-Match", if_none_match);
         } else {
@@ -750,14 +789,15 @@ static esp_err_t http_frame_get_keepalive(const char *url,
         status = esp_http_client_get_status_code(s_frame_http_client);
         s_frame_final_ctx = s_frame_diag_ctx;
 
-        if (content_len < 0 && status == 0) {
+        if (status == 0) {
             if (s_frame_final_ctx.sock_errno == 0 && errno != 0) {
                 s_frame_final_ctx.sock_errno = errno;
             }
             err = ESP_FAIL;
             frame_http_reset_locked();
             if (reused && attempt == 0) {
-                ESP_LOGD(TAG, "Keep-alive socket dropped on headers; reconnecting...");
+                ESP_LOGD(TAG, "Keep-alive socket closed on headers (content_len=%lld); reconnecting...",
+                         (long long)content_len);
                 continue;
             }
             break;
@@ -768,6 +808,8 @@ static esp_err_t http_frame_get_keepalive(const char *url,
             esp_http_client_flush_response(s_frame_http_client, &flushed);
             if (s_frame_final_ctx.conn_close) {
                 frame_http_reset_locked();
+            } else {
+                s_frame_http_last_use_us = esp_timer_get_time();
             }
             err = ESP_OK;
             stage = "ok";
@@ -860,6 +902,8 @@ static esp_err_t http_frame_get_keepalive(const char *url,
 
         if (s_frame_final_ctx.conn_close || !esp_http_client_is_complete_data_received(s_frame_http_client)) {
             frame_http_reset_locked();
+        } else {
+            s_frame_http_last_use_us = esp_timer_get_time();
         }
 
         buf[total] = '\0';
@@ -1014,6 +1058,9 @@ esp_err_t api_client_fetch_config(cs_device_config_t *out_cfg)
     }
     memset(out_cfg, 0, sizeof(*out_cfg));
     out_cfg->brightness_override = -1;
+    snprintf(out_cfg->selection_mode, sizeof(out_cfg->selection_mode), "priority");
+    out_cfg->rotation_seconds = 20U;
+    out_cfg->rotate_include_clock = false;
     snprintf(out_cfg->device_name, sizeof(out_cfg->device_name), "Clean Slate");
     snprintf(out_cfg->quiet_start, sizeof(out_cfg->quiet_start), "23:00");
     snprintf(out_cfg->quiet_end, sizeof(out_cfg->quiet_end), "07:00");
@@ -1076,6 +1123,20 @@ esp_err_t api_client_fetch_config(cs_device_config_t *out_cfg)
                 out_cfg->enabled_app_count++;
             }
         }
+    }
+
+    if (json_obj_get(root, "selection_mode", &val) && !json_is_null(val)) {
+        json_as_str(val, out_cfg->selection_mode, sizeof(out_cfg->selection_mode));
+    }
+    {
+        int64_t rsec = 0;
+        if (json_obj_get(root, "rotation_seconds", &val) && json_as_int(val, &rsec) &&
+            rsec >= 5 && rsec <= 300) {
+            out_cfg->rotation_seconds = (uint16_t)rsec;
+        }
+    }
+    if (json_obj_get(root, "rotate_include_clock", &val) && !json_is_null(val)) {
+        json_as_bool(val, &out_cfg->rotate_include_clock);
     }
 
     if (json_obj_get(root, "quiet_hours", &val) && !json_is_null(val)) {
@@ -1275,6 +1336,31 @@ esp_err_t api_client_post_config(const cs_local_settings_t *settings,
     return api_client_post_config_ext(settings, &extras);
 }
 
+esp_err_t api_client_disable_alarm(const char *alarm_id)
+{
+    if (!alarm_id || !alarm_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    char base[192];
+    settings_store_get_api_base_url(base, sizeof(base));
+    char url[336];
+    snprintf(url, sizeof(url), "%s/api/v1/device/%s/alarms/%s/disable",
+             base, wifi_manager_get_device_id(), alarm_id);
+
+    char *resp = NULL;
+    size_t resp_len = 0;
+    int status = 0;
+    esp_err_t err = http_request_alloc(HTTP_METHOD_POST, url, "{}", 2, &resp, &resp_len, &status);
+    free(resp);
+    if (err == ESP_OK || status == 404) {
+        cache_clear_cfg_json();
+        ESP_LOGI(TAG, "Synced one-time alarm auto-disable to cloud: %s (status=%d)", alarm_id, status);
+        return ESP_OK;
+    }
+    ESP_LOGW(TAG, "POST /alarms/%s/disable failed (status=%d, err=%s)", alarm_id, status, esp_err_to_name(err));
+    return err;
+}
+
 esp_err_t api_client_delete_alarm(const char *alarm_id)
 {
     if (!alarm_id || !alarm_id[0]) {
@@ -1292,6 +1378,7 @@ esp_err_t api_client_delete_alarm(const char *alarm_id)
     esp_err_t err = http_request_alloc(HTTP_METHOD_DELETE, url, NULL, 0, &resp, &resp_len, &status);
     free(resp);
     if (err == ESP_OK || status == 404) {
+        cache_clear_cfg_json();
         ESP_LOGI(TAG, "Synced one-time alarm deletion to cloud: %s (status=%d)", alarm_id, status);
         return ESP_OK;
     }
@@ -1570,55 +1657,117 @@ static void parse_overlays(json_span_t overlays_arr, cs_frame_response_t *out)
     size_t cur = 0;
     json_span_t item;
     while (out->overlay_count < CS_MAX_OVERLAYS && json_arr_iter(overlays_arr, &cur, &item)) {
-        cs_overlay_t ov;
-        memset(&ov, 0, sizeof(ov));
-        ov.r = 255;
-        ov.g = 255;
-        ov.b = 255;
-        ov.font = GFX_FONT_3X5;
-        ov.align = GFX_ALIGN_LEFT;
+        cs_overlay_t *ov = &out->overlays[out->overlay_count];
+        memset(ov, 0, sizeof(*ov));
+        ov->r = 255;
+        ov->g = 255;
+        ov->b = 255;
+        ov->font = GFX_FONT_3X5;
+        ov->align = GFX_ALIGN_LEFT;
+        ov->max_width = 62;
+        ov->max_lines = 3;
+        ov->line_spacing = 6;
+        ov->page_seconds = 6;
+        ov->scroll_speed_ms = 40;
+        ov->clip_y0 = 8;
+        ov->clip_y1 = 25;
+        ov->dot_ar = 255;
+        ov->dot_ag = 210;
+        ov->dot_ab = 95;
+        ov->dot_ir = 64;
+        ov->dot_ig = 70;
+        ov->dot_ib = 92;
 
         char tmp[64];
         json_span_t fv;
         if (!json_obj_get(item, "type", &fv) || !json_as_str(fv, tmp, sizeof(tmp))) {
             continue;
         }
-        ov.type = parse_overlay_type(tmp);
-        if (ov.type == CS_OVERLAY_NONE) {
+        ov->type = parse_overlay_type(tmp);
+        if (ov->type == CS_OVERLAY_NONE) {
             continue;
         }
 
         if (json_obj_get(item, "id", &fv) && !json_is_null(fv)) {
-            json_as_str(fv, ov.id, sizeof(ov.id));
+            json_as_str(fv, ov->id, sizeof(ov->id));
         }
         int64_t iv = 0;
         if (json_obj_get(item, "x", &fv) && json_as_int(fv, &iv)) {
-            ov.x = (int16_t)iv;
+            ov->x = (int16_t)iv;
         }
         if (json_obj_get(item, "y", &fv) && json_as_int(fv, &iv)) {
-            ov.y = (int16_t)iv;
+            ov->y = (int16_t)iv;
         }
         if (json_obj_get(item, "font", &fv) && json_as_str(fv, tmp, sizeof(tmp))) {
-            ov.font = parse_font_id(tmp);
+            ov->font = parse_font_id(tmp);
         }
         if (json_obj_get(item, "align", &fv) && json_as_str(fv, tmp, sizeof(tmp))) {
-            ov.align = parse_align(tmp);
+            ov->align = parse_align(tmp);
         }
         if (json_obj_get(item, "color_rgb565", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
-            ov.color_rgb565 = (uint16_t)iv;
+            ov->color_rgb565 = (uint16_t)iv;
         }
-        parse_json_color(item, &ov.r, &ov.g, &ov.b);
+        parse_json_color(item, &ov->r, &ov->g, &ov->b);
         if (json_obj_get(item, "format", &fv)) {
-            json_as_str(fv, ov.format, sizeof(ov.format));
+            json_as_str(fv, ov->format, sizeof(ov->format));
         }
         if (json_obj_get(item, "text", &fv)) {
-            json_as_str(fv, ov.text, sizeof(ov.text));
+            json_as_str(fv, ov->text, sizeof(ov->text));
         }
         if (json_obj_get(item, "target_epoch", &fv) && !json_is_null(fv)) {
-            json_as_int(fv, &ov.target_epoch);
+            json_as_int(fv, &ov->target_epoch);
+        }
+        if (json_obj_get(item, "max_width", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+            if (iv < 16) iv = 16;
+            if (iv > CS_FRAME_WIDTH) iv = CS_FRAME_WIDTH;
+            ov->max_width = (uint8_t)iv;
+        }
+        if (json_obj_get(item, "max_lines", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+            if (iv < 1) iv = 1;
+            if (iv > 4) iv = 4;
+            ov->max_lines = (uint8_t)iv;
+        }
+        if (json_obj_get(item, "line_spacing", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+            if (iv < 5) iv = 5;
+            if (iv > 12) iv = 12;
+            ov->line_spacing = (uint8_t)iv;
+        }
+        if (json_obj_get(item, "page_seconds", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+            if (iv < 3) iv = 3;
+            if (iv > 30) iv = 30;
+            ov->page_seconds = (uint8_t)iv;
+        }
+        if (json_obj_get(item, "scroll_speed_ms", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+            if (iv < 20) iv = 20;
+            if (iv > 400) iv = 400;
+            ov->scroll_speed_ms = (uint16_t)iv;
+        }
+        if (json_obj_get(item, "clip_y0", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+            if (iv < 0) iv = 0;
+            if (iv >= CS_FRAME_HEIGHT) iv = CS_FRAME_HEIGHT - 1;
+            ov->clip_y0 = (int16_t)iv;
+        }
+        if (json_obj_get(item, "clip_y1", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+            if (iv < 0) iv = 0;
+            if (iv >= CS_FRAME_HEIGHT) iv = CS_FRAME_HEIGHT - 1;
+            ov->clip_y1 = (int16_t)iv;
+        }
+        if (json_obj_get(item, "dots_y", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+            ov->has_dots = true;
+            ov->dots_y = (int16_t)iv;
+            ov->dots_x = CS_FRAME_WIDTH - 1;
+            if (json_obj_get(item, "dots_x", &fv) && !json_is_null(fv) && json_as_int(fv, &iv)) {
+                ov->dots_x = (int16_t)iv;
+            }
+        }
+        if (json_obj_get(item, "dot_active_hex", &fv) && !json_is_null(fv) && json_as_str(fv, tmp, sizeof(tmp))) {
+            parse_hex_color(tmp, &ov->dot_ar, &ov->dot_ag, &ov->dot_ab);
+        }
+        if (json_obj_get(item, "dot_idle_hex", &fv) && !json_is_null(fv) && json_as_str(fv, tmp, sizeof(tmp))) {
+            parse_hex_color(tmp, &ov->dot_ir, &ov->dot_ig, &ov->dot_ib);
         }
 
-        out->overlays[out->overlay_count++] = ov;
+        out->overlay_count++;
     }
 }
 
@@ -2207,7 +2356,8 @@ static bool verify_partition_sha256_hex(const esp_partition_t *part,
 esp_err_t api_client_check_and_run_ota(const char *current_version,
                                        bool *update_avail_out,
                                        char *detail_out,
-                                       size_t detail_cap)
+                                       size_t detail_cap,
+                                       cs_ota_progress_cb_t on_progress)
 {
     if (update_avail_out) {
         *update_avail_out = false;
@@ -2217,6 +2367,7 @@ esp_err_t api_client_check_and_run_ota(const char *current_version,
     }
 #if !CONFIG_CS_OTA_ENABLED
     (void)current_version;
+    (void)on_progress;
     if (detail_out && detail_cap > 0) {
         snprintf(detail_out, detail_cap, "OTA disabled in firmware build");
     }
@@ -2294,8 +2445,12 @@ esp_err_t api_client_check_and_run_ota(const char *current_version,
 
     ESP_LOGI(TAG, "OTA update available (%s -> %s), downloading %s",
              current_version, latest_ver, ota_url);
+    const char *ver_label = latest_ver[0] ? latest_ver : "latest";
     if (detail_out && detail_cap > 0) {
-        snprintf(detail_out, detail_cap, "%s", latest_ver[0] ? latest_ver : "updating");
+        snprintf(detail_out, detail_cap, "%s", ver_label);
+    }
+    if (on_progress) {
+        on_progress("updating", ver_label);
     }
 
     esp_http_client_config_t http_cfg = {
@@ -2314,26 +2469,47 @@ esp_err_t api_client_check_and_run_ota(const char *current_version,
     esp_https_ota_handle_t ota_handle = NULL;
     err = esp_https_ota_begin(&ota_cfg, &ota_handle);
     if (err == ESP_OK) {
+        int last_pct = -1;
         while (true) {
             err = esp_https_ota_perform(ota_handle);
             if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
                 break;
             }
+            if (on_progress) {
+                int total_sz = esp_https_ota_get_image_size(ota_handle);
+                int read_sz = esp_https_ota_get_image_len_read(ota_handle);
+                if (total_sz > 0 && read_sz >= 0) {
+                    int pct = (int)(((int64_t)read_sz * 100LL) / total_sz);
+                    if (pct > 100) pct = 100;
+                    if (pct >= last_pct + 5 || (last_pct < 0 && pct > 0)) {
+                        last_pct = pct;
+                        char prog[64];
+                        snprintf(prog, sizeof(prog), "%s (%d%%)", ver_label, pct);
+                        on_progress("updating", prog);
+                    }
+                }
+            }
         }
         if (err == ESP_OK && esp_https_ota_is_complete_data_received(ota_handle)) {
             int img_len = esp_https_ota_get_image_len_read(ota_handle);
-            bool hash_ok = true;
+            bool hash_ok = false;
             if (strlen(expected_sha256) == 64U) {
+                if (on_progress) {
+                    char prog[64];
+                    snprintf(prog, sizeof(prog), "%s (verifying)", ver_label);
+                    on_progress("updating", prog);
+                }
                 hash_ok = (update_part != NULL && img_len > 0 &&
                            verify_partition_sha256_hex(update_part, (size_t)img_len, expected_sha256));
             } else {
-                ESP_LOGW(TAG, "OTA server omitted sha256; proceeding without hash check");
+                ESP_LOGE(TAG, "OTA aborted: server omitted required 64-char sha256");
             }
             if (!hash_ok) {
                 esp_https_ota_abort(ota_handle);
                 err = ESP_ERR_INVALID_CRC;
                 if (detail_out && detail_cap > 0) {
-                    snprintf(detail_out, detail_cap, "SHA-256 mismatch");
+                    snprintf(detail_out, detail_cap,
+                             strlen(expected_sha256) == 64U ? "SHA-256 mismatch" : "Missing SHA-256");
                 }
             } else {
                 err = esp_https_ota_finish(ota_handle);
@@ -2348,6 +2524,10 @@ esp_err_t api_client_check_and_run_ota(const char *current_version,
 
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "OTA update succeeded, restarting...");
+        if (on_progress) {
+            on_progress("rebooting", ver_label);
+            vTaskDelay(pdMS_TO_TICKS(350));
+        }
         s_ota_reboot_magic = OTA_REBOOT_MAGIC;
         esp_restart();
     } else {
@@ -2583,5 +2763,44 @@ esp_err_t api_client_diagnose_server(const char *override_base_url, cs_server_di
              (unsigned long)out->dns_ms, out->resolved_ip,
              out->apps_status, (unsigned long)out->apps_ms,
              out->config_status, (unsigned long)out->config_ms);
+    return ESP_OK;
+}
+
+esp_err_t api_client_enroll_device(char *out_token, size_t out_cap)
+{
+    if (!out_token || out_cap < 16) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    out_token[0] = '\0';
+
+    char base[192];
+    settings_store_get_api_base_url(base, sizeof(base));
+    char url[320];
+    snprintf(url, sizeof(url), "%s/api/v1/device/%s/enroll",
+             base, wifi_manager_get_device_id());
+
+    char *body = NULL;
+    size_t body_len = 0;
+    int status = 0;
+    esp_err_t err = http_request_alloc_ex(HTTP_METHOD_POST, url, "{}", 2,
+                                          &body, &body_len, &status, NULL, NULL, false);
+    if (err != ESP_OK || status < 200 || status >= 300 || !body || body_len == 0) {
+        ESP_LOGI(TAG, "Device enrollment skipped/deferred (status=%d, err=%s)",
+                 status, esp_err_to_name(err));
+        free(body);
+        return (err != ESP_OK) ? err : ESP_FAIL;
+    }
+
+    json_span_t root = json_root(body, body_len);
+    json_span_t fv;
+    bool ok = json_obj_get(root, "device_token", &fv) &&
+              json_as_str(fv, out_token, out_cap) &&
+              strlen(out_token) >= 16U;
+    free(body);
+    if (!ok) {
+        out_token[0] = '\0';
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    ESP_LOGI(TAG, "Enrolled per-device bearer token (%u chars)", (unsigned)strlen(out_token));
     return ESP_OK;
 }

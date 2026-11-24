@@ -24,12 +24,17 @@ extern "C" {
 #define CS_MAX_OVERLAYS         8
 #define CS_MAX_ALERT_FRAMES     32
 
+#define CS_OVERLAY_TEXT_CAP     640
+
 typedef enum {
     CS_OVERLAY_NONE = 0,
     CS_OVERLAY_NTP_TIME,
     CS_OVERLAY_NTP_DATE,
     CS_OVERLAY_COUNTDOWN,
     CS_OVERLAY_TEXT,
+    CS_OVERLAY_PAGED_TEXT,
+    CS_OVERLAY_SCROLL_TEXT,
+    CS_OVERLAY_SCROLL_UP,
 } cs_overlay_type_t;
 
 typedef struct {
@@ -44,8 +49,24 @@ typedef struct {
     uint8_t g;
     uint8_t b;
     char format[32];
-    char text[64];
+    char text[CS_OVERLAY_TEXT_CAP];
     int64_t target_epoch;
+    uint8_t max_width;
+    uint8_t max_lines;
+    uint8_t line_spacing;
+    uint8_t page_seconds;
+    uint16_t scroll_speed_ms;
+    int16_t clip_y0;
+    int16_t clip_y1;
+    bool has_dots;
+    int16_t dots_x;
+    int16_t dots_y;
+    uint8_t dot_ar;
+    uint8_t dot_ag;
+    uint8_t dot_ab;
+    uint8_t dot_ir;
+    uint8_t dot_ig;
+    uint8_t dot_ib;
 } cs_overlay_t;
 
 typedef struct {
@@ -76,6 +97,9 @@ typedef struct {
     bool active_events_known;
     bool active_event_birthdays;
     bool active_event_holidays;
+    char selection_mode[16];     /* "priority" or "rotate" */
+    uint16_t rotation_seconds;   /* 5..300 (default 20) */
+    bool rotate_include_clock;
     bool quiet_enabled;
     char quiet_start[8];
     char quiet_end[8];
@@ -177,9 +201,20 @@ esp_err_t api_client_fetch_device_config_json(char **out_json, size_t *out_len);
 esp_err_t api_client_get_cached_device_config_json(bool force_refresh, char **out_json, size_t *out_len);
 
 /**
- * Delete a consumed one-time alarm on the cloud server via DELETE /api/v1/device/{id}/alarms/{alarm_id}.
+ * Auto-disable a fired one-time alarm on the cloud server via POST /api/v1/device/{id}/alarms/{alarm_id}/disable.
+ */
+esp_err_t api_client_disable_alarm(const char *alarm_id);
+
+/**
+ * Delete a specific alarm on the cloud server via DELETE /api/v1/device/{id}/alarms/{alarm_id}.
  */
 esp_err_t api_client_delete_alarm(const char *alarm_id);
+
+/**
+ * Claim a one-time per-device bearer token via POST /api/v1/device/{device_id}/enroll.
+ * Returns ESP_OK and copies the token into out_token on HTTP 200.
+ */
+esp_err_t api_client_enroll_device(char *out_token, size_t out_cap);
 
 /**
  * Fetch /api/v1/apps metadata and cache app screens[] descriptors internally.
@@ -241,15 +276,19 @@ bool api_client_strip_stream_next(cs_strip_stream_t *stream, uint8_t *out_rgb565
  */
 void api_client_strip_stream_end(cs_strip_stream_t *stream);
 
+typedef void (*cs_ota_progress_cb_t)(const char *status, const char *detail);
+
 /**
  * Query /api/v1/firmware/check?current_version=... and perform esp_https_ota if
  * update_available is true. Returns ESP_OK if no update (reboots on OTA success).
- * Optionally populates update_avail_out and detail_out (latest version or reason).
+ * Optionally invokes on_progress("updating" / "rebooting", detail) during the download
+ * and populates update_avail_out and detail_out (latest version or reason).
  */
 esp_err_t api_client_check_and_run_ota(const char *current_version,
                                        bool *update_avail_out,
                                        char *detail_out,
-                                       size_t detail_cap);
+                                       size_t detail_cap,
+                                       cs_ota_progress_cb_t on_progress);
 
 /**
  * Return true once after an OTA-initiated esp_restart() so startup boot tones can

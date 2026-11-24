@@ -667,6 +667,14 @@
               </button>
             </div>
 
+            <button type="button" class="remote-btn row btn-sound" id="btn-show-votd">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+              </svg>
+              <span>Verse of the Day (3 min)</span>
+            </button>
+
             <button type="button" class="remote-btn row btn-auto" id="btn-auto-screen" aria-pressed="true">
               <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
@@ -840,7 +848,10 @@
         lastNonZeroVol: 18,
         activeApp: 'clock',
         pinnedApp: '',
+        tempApp: '',
+        tempRemainingSec: 0,
         online: true,
+        alarmRinging: false,
         volTimer: null,
         volSending: false,
         volQueued: null,
@@ -862,6 +873,7 @@
         'cbb_scoreboard:tv_info': 'Basketball TV & Weather',
         birthdays: 'Birthdays',
         holidays: 'Holidays',
+        bible_votd: 'Bible Verse',
         alarm: 'Alarm'
       };
 
@@ -916,10 +928,15 @@
       }
 
       function renderScreenState() {
-        const currentKey = state.pinnedApp || state.activeApp || 'clock';
+        const currentKey = state.tempApp || state.pinnedApp || state.activeApp || 'clock';
         $('active-screen-name').textContent = formatScreenName(currentKey);
-        const isAuto = !state.pinnedApp;
-        $('mode-tag').textContent = isAuto ? 'Auto' : 'Manual';
+        const isAuto = !state.pinnedApp && !state.tempApp;
+        if (state.tempApp) {
+          const mins = Math.max(1, Math.ceil((state.tempRemainingSec || 60) / 60));
+          $('mode-tag').textContent = `Timed (${mins}m)`;
+        } else {
+          $('mode-tag').textContent = isAuto ? 'Auto' : 'Manual';
+        }
         const autoBtn = $('btn-auto-screen');
         autoBtn.setAttribute('aria-pressed', isAuto ? 'true' : 'false');
         $('btn-auto-label').textContent = isAuto ? 'Auto Schedule (On)' : 'Return to Auto Schedule';
@@ -1003,11 +1020,12 @@
         });
       }
 
-      async function loadAlarms() {
+      async function loadAlarms(forceFresh = false) {
         const emptyEl = $('remote-alarms-empty');
         const listEl = $('remote-alarms-list');
         try {
-          const cfg = await fetchJson('/api/local/cloud-config', {}, 8000);
+          const url = forceFresh ? '/api/local/cloud-config?fresh=1' : '/api/local/cloud-config';
+          const cfg = await fetchJson(url, {}, 8000);
           const enabledSet = new Set(Array.isArray(cfg.enabled_apps) ? cfg.enabled_apps : []);
           const alarmEnabled = enabledSet.has('alarm');
           const acfg = (cfg.app_settings && cfg.app_settings.alarm) ? cfg.app_settings.alarm : {};
@@ -1061,7 +1079,11 @@
             t.textContent = fmtTime(item.time);
             const sub = document.createElement('div');
             sub.className = 'alarm-row-sub';
-            sub.textContent = `${item.label || 'WAKE UP!'} · ${fmtDays(item.days, item.repeat)}`;
+            const afterMins = Math.max(1, Math.min(60, Number(item.after_minutes) || 5));
+            const afterTxt = item.after_action === 'bible_votd_gentle'
+              ? ` · Gentle Bible Verse (${afterMins}m)`
+              : (item.after_action === 'bible_votd' ? ` · + Bible Verse (${afterMins}m)` : '');
+            sub.textContent = `${item.label || 'WAKE UP!'} · ${fmtDays(item.days, item.repeat)}${afterTxt}`;
             left.append(t, sub);
             const tag = document.createElement('span');
             tag.className = 'mode-tag';
@@ -1082,7 +1104,13 @@
         try {
           const st = await fetchJson('/api/local/status', {}, 4500);
           setOnline(true);
-          $('alarm-ringing-card').hidden = !Boolean(st.alarm_ringing);
+          const ringing = Boolean(st.alarm_ringing);
+          const ringingChanged = ringing !== state.alarmRinging;
+          state.alarmRinging = ringing;
+          $('alarm-ringing-card').hidden = !ringing;
+          if (ringingChanged) {
+            loadAlarms(true);
+          }
           if (st.settings && typeof st.settings.device_name === 'string' && st.settings.device_name.trim()) {
             $('device-title').textContent = st.settings.device_name.trim();
           }
@@ -1095,6 +1123,8 @@
             state.activeApp = st.active_app;
           }
           state.pinnedApp = typeof st.pinned_app === 'string' ? st.pinned_app : '';
+          state.tempApp = typeof st.temp_app === 'string' ? st.temp_app : '';
+          state.tempRemainingSec = Number(st.temp_remaining_sec) || 0;
           renderScreenState();
           if (!silent) {
             setBanner('Connected to clock', 'ok', 2200);
@@ -1153,6 +1183,26 @@
       $('btn-prev-screen').addEventListener('click', (e) => runStep(-1, e.currentTarget));
       $('btn-next-screen').addEventListener('click', (e) => runStep(1, e.currentTarget));
 
+      $('btn-show-votd').addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        buzz();
+        btn.setAttribute('aria-busy', 'true');
+        try {
+          await postAction({ action: 'show_temp_app', app_id: 'bible_votd', duration_sec: 180 });
+          setOnline(true);
+          state.tempApp = 'bible_votd';
+          state.tempRemainingSec = 180;
+          state.activeApp = 'bible_votd';
+          renderScreenState();
+          setBanner('Showing Verse of the Day (3 min)', 'ok', 3200);
+          setTimeout(() => loadStatus(true), 450);
+        } catch (_) {
+          setOnline(false);
+        } finally {
+          btn.removeAttribute('aria-busy');
+        }
+      });
+
       $('btn-auto-screen').addEventListener('click', async (e) => {
         const btn = e.currentTarget;
         buzz();
@@ -1161,6 +1211,8 @@
           await postAction({ action: 'set_app', app_id: '' });
           setOnline(true);
           state.pinnedApp = '';
+          state.tempApp = '';
+          state.tempRemainingSec = 0;
           renderScreenState();
           setBanner('Returned to Auto Schedule', 'ok', 2800);
           setTimeout(() => loadStatus(true), 450);
@@ -1200,7 +1252,9 @@
         try {
           await postAction({ action: 'dismiss_alarm' });
           setOnline(true);
+          state.alarmRinging = false;
           $('alarm-ringing-card').hidden = true;
+          loadAlarms(true);
           setBanner('Alarm dismissed', 'ok', 2800);
         } catch (_) {
           setOnline(false);

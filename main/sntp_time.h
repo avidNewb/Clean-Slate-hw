@@ -40,9 +40,9 @@ void sntp_time_format_clock(const char *fmt, char *out, size_t out_cap);
 void sntp_time_format_date(char *out, size_t out_cap);
 
 /**
- * Format countdown to target_epoch matching Clean Slate preview_ui.py / cfb_scoreboard.py.
+ * Format countdown to target_epoch using prefix from fmt (e.g. "TIP ..." or "KICK ...").
  */
-void sntp_time_format_countdown(int64_t target_epoch, char *out, size_t out_cap);
+void sntp_time_format_countdown(int64_t target_epoch, const char *fmt, char *out, size_t out_cap);
 
 /**
  * Return true if current local time falls within quiet hours [start_hhmm, end_hhmm).

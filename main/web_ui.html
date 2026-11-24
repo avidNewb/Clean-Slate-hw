@@ -826,6 +826,83 @@
       opacity: 0.65;
     }
 
+    .alarm-summary-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .alarm-switch {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+
+    .alarm-switch input {
+      position: absolute;
+      opacity: 0;
+      width: 44px;
+      height: 24px;
+      margin: 0;
+      cursor: pointer;
+    }
+
+    .alarm-switch-track {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      border-radius: 999px;
+      background: var(--border);
+      transition: background 0.16s ease;
+      pointer-events: none;
+    }
+
+    .alarm-switch-track::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+      transition: transform 0.16s ease;
+    }
+
+    .alarm-switch input:checked + .alarm-switch-track {
+      background: var(--ok, #16a34a);
+    }
+
+    .alarm-switch input:checked + .alarm-switch-track::after {
+      transform: translateX(20px);
+    }
+
+    .alarm-switch input:focus-visible + .alarm-switch-track {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .bday-table tr.alarm-row-disabled td,
+    .bday-table tr.alarm-row-disabled th {
+      opacity: 0.58;
+    }
+
+    .bday-table tr.alarm-row-editing {
+      outline: 2px solid var(--accent);
+      background: var(--surface-alt);
+    }
+
+    .alarm-row-actions {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: nowrap;
+    }
+
     .alarm-summary-time {
       font-size: 1.1rem;
       font-weight: 700;
@@ -1170,6 +1247,7 @@
           <div class="control-group">
             <div class="control-group-label">Display &amp; System</div>
             <div class="btn-bar">
+              <button type="button" id="btn-show-votd" class="primary">Verse of the Day (3m)</button>
               <a href="/remote" class="nav-link" style="border: 1px solid var(--accent); background: var(--surface);">Open Simple Remote (/remote)</a>
               <button type="button" id="btn-refresh">Refresh Display Now</button>
               <button type="button" id="btn-check-ota">Check Firmware Update</button>
@@ -1209,7 +1287,7 @@
                 <label for="cfg-selection-mode">App Conflict Mode</label>
                 <select id="cfg-selection-mode" name="selection_mode">
                   <option value="priority">Strict Priority (highest priority wins)</option>
-                  <option value="rotate">Timed Rotation (cycle eligible apps)</option>
+                  <option value="rotate">Timed Rotation (cycle enabled screens)</option>
                 </select>
               </div>
             </div>
@@ -1217,7 +1295,7 @@
             <div class="field-row" id="rotation-controls-wrap" hidden>
               <div class="field">
                 <label for="cfg-rotation-seconds">Rotation Interval (seconds)</label>
-                <p class="hint" id="rot-sec-hint">5 to 300 seconds per app when rotating (default: 20).</p>
+                <p class="hint" id="rot-sec-hint">5 to 300 seconds per screen when rotating (default: 20).</p>
                 <input type="number" id="cfg-rotation-seconds" name="rotation_seconds" min="5" max="300" step="1"
                        value="20" inputmode="numeric" aria-describedby="rot-sec-hint">
               </div>
@@ -1228,6 +1306,9 @@
                 </div>
               </div>
             </div>
+            <p class="hint" id="rotation-pinned-warn" style="color: var(--warn, #f59e0b);" hidden>
+              Active Screen Mode is currently pinned to a single screen. Switch Active Screen Mode to <strong>Auto Schedule (recommended)</strong> for Timed Rotation to cycle screens.
+            </p>
 
             <div class="field-row">
               <div class="field">
@@ -1624,15 +1705,20 @@
                 </div>
               </div>
 
-              <div class="field">
-                <label for="setup-api-url">Clean Slate Server URL <span aria-hidden="true">*</span></label>
-                <input type="url" id="setup-api-url" name="api_base_url" required
-                       autocorrect="off" autocapitalize="none" spellcheck="false"
-                       enterkeyhint="done" data-error="setup-url-err">
-                <div id="setup-url-err" class="error-msg">
-                  <span role="img" aria-label="Error">❌</span> Enter a valid http:// or https:// server URL.
+              <details style="margin-top:8px;">
+                <summary class="hint" style="cursor:pointer; user-select:none;">Advanced: Custom Server URL (optional — defaults to Clean Slate Cloud)</summary>
+                <div class="field" style="margin-top:10px;">
+                  <label for="setup-api-url">Clean Slate Server URL</label>
+                  <input type="url" id="setup-api-url" name="api_base_url"
+                         placeholder="https://clean-slate-cce5b9f3g2ggf5cv.westus3-01.azurewebsites.net"
+                         autocorrect="off" autocapitalize="none" spellcheck="false"
+                         enterkeyhint="done" data-error="setup-url-err">
+                  <div class="hint">Leave blank to use the built-in default Clean Slate server.</div>
+                  <div id="setup-url-err" class="error-msg">
+                    <span role="img" aria-label="Error">❌</span> Enter a valid http:// or https:// server URL, or leave blank for default.
+                  </div>
                 </div>
-              </div>
+              </details>
             </fieldset>
 
             <div class="btn-bar">
@@ -1670,16 +1756,18 @@
 
           <form id="server-url-form" novalidate style="margin-block: 0.75rem;">
             <div class="field">
-              <label for="cfg-api-url">Saved Clean Slate Server URL <span aria-hidden="true">*</span></label>
+              <label for="cfg-api-url">Saved Clean Slate Server URL</label>
               <div class="input-row">
-                <input type="url" id="cfg-api-url" name="api_base_url" required
+                <input type="url" id="cfg-api-url" name="api_base_url"
+                       placeholder="https://clean-slate-cce5b9f3g2ggf5cv.westus3-01.azurewebsites.net"
                        autocorrect="off" autocapitalize="none" spellcheck="false"
                        data-error="cfg-url-err">
                 <button type="submit" id="btn-save-server-url">Save URL</button>
                 <button type="button" id="btn-test-cfg-url">Test Saved</button>
               </div>
+              <div class="hint">Leave blank and click Save URL to restore the default Clean Slate server.</div>
               <div id="cfg-url-err" class="error-msg">
-                <span role="img" aria-label="Error">❌</span> Enter a valid http:// or https:// server URL.
+                <span role="img" aria-label="Error">❌</span> Enter a valid http:// or https:// server URL, or leave blank for default.
               </div>
             </div>
           </form>
@@ -1751,6 +1839,24 @@
     <form method="dialog" class="btn-bar">
       <button value="cancel">Cancel</button>
       <button id="dialog-confirm-btn" value="confirm" class="primary">Confirm</button>
+    </form>
+  </dialog>
+
+  <dialog id="admin-pin-dialog" closedby="any" aria-labelledby="pin-dialog-title">
+    <h1 id="pin-dialog-title">Unlock Device Admin</h1>
+    <p class="hint">Enter the 4-digit PIN shown on your Clean Slate LED display — or press the knob on the device — to unlock for 5 minutes.</p>
+    <form id="admin-pin-form" novalidate>
+      <div class="field">
+        <label for="admin-pin-input">4-Digit Display PIN</label>
+        <input type="text" id="admin-pin-input" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"
+               placeholder="1234" autocomplete="one-time-code" required
+               style="font-size:1.4rem;letter-spacing:0.35em;text-align:center;">
+        <div id="admin-pin-err" class="error-msg" style="display:none;"></div>
+      </div>
+      <div class="btn-bar">
+        <button type="button" id="btn-pin-cancel">Cancel</button>
+        <button type="submit" id="btn-pin-verify" class="primary">Unlock</button>
+      </div>
     </form>
   </dialog>
 
@@ -1895,6 +2001,25 @@
     let volDebounce = null;
     let brightDebounce = null;
     let awaitingOtaResult = false;
+    let otaPollTimer = null;
+    function scheduleOtaFastPoll() {
+      if (otaPollTimer) return;
+      otaPollTimer = setInterval(async () => {
+        if (document.hidden) return;
+        try { await loadStatus(); } catch (_) {}
+      }, 1000);
+    }
+    function stopOtaFastPoll() {
+      if (otaPollTimer) {
+        clearInterval(otaPollTimer);
+        otaPollTimer = null;
+      }
+    }
+    function formatOtaVersionLabel(detail) {
+      const raw = String(detail || '').trim();
+      if (!raw) return 'new version';
+      return /^v\d/i.test(raw) ? raw : `v${raw}`;
+    }
     let liveMirrorUserEnabled = true;
     let pollTimer = null;
     let latestStatus = null;
@@ -2121,11 +2246,15 @@
     const rotationWrap = document.getElementById('rotation-controls-wrap');
     const rotationSecInp = document.getElementById('cfg-rotation-seconds');
     const rotateClockChk = document.getElementById('cfg-rotate-clock');
+    const rotationPinnedWarn = document.getElementById('rotation-pinned-warn');
+    const pinnedAppSel = document.getElementById('cfg-pinned-app');
+    let cloudConfigLoaded = false;
 
     const CATEGORY_LABELS = {
       sports_cfb: 'CFB',
       sports_cbb: 'CBB',
       events: 'Events',
+      lifestyle: 'Lifestyle',
       utility: 'Utility',
     };
     const DAYS_OF_WEEK = [
@@ -2143,8 +2272,19 @@
       rotationWrap.hidden = !isRotate;
       rotationSecInp.disabled = !isRotate;
       rotateClockChk.disabled = !isRotate;
+      if (rotationPinnedWarn) {
+        rotationPinnedWarn.hidden = !(isRotate && pinnedAppSel && pinnedAppSel.value !== '');
+      }
     }
-    selectionModeSel.addEventListener('change', syncRotationUI);
+    selectionModeSel.addEventListener('change', () => {
+      cloudConfigLoaded = true;
+      syncRotationUI();
+    });
+    rotationSecInp.addEventListener('input', () => { cloudConfigLoaded = true; });
+    rotateClockChk.addEventListener('change', () => { cloudConfigLoaded = true; });
+    if (pinnedAppSel) {
+      pinnedAppSel.addEventListener('change', syncRotationUI);
+    }
     syncRotationUI();
 
     function categoryLabel(cat) {
@@ -2244,6 +2384,12 @@
             ? item.days.map((d) => String(d).trim().toLowerCase()).filter((d) => ALARM_WEEKDAYS.some(([k]) => k === d))
             : [];
           const repeat = (item.repeat === false || days.length === 0) ? false : true;
+          const rawAfter = typeof item.after_action === 'string' ? item.after_action.trim().toLowerCase() : '';
+          const afterAction = (rawAfter === 'bible_votd' || rawAfter === 'bible_votd_gentle') ? rawAfter : '';
+          const afterMinNum = Number(item.after_minutes);
+          const afterMinutes = (Number.isFinite(afterMinNum) && afterMinNum >= 1 && afterMinNum <= 60)
+            ? Math.round(afterMinNum)
+            : 5;
           out.push({
             id: String(item.id || `alarm_${i + 1}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || `alarm_${i + 1}`,
             enabled: item.enabled !== false,
@@ -2253,6 +2399,8 @@
             label: String(item.label || 'WAKE UP!').trim().slice(0, 24) || 'WAKE UP!',
             sound: typeof item.sound === 'string' ? item.sound.trim() : '',
             theme: typeof item.theme === 'string' ? item.theme.trim() : '',
+            after_action: afterAction,
+            after_minutes: afterMinutes,
           });
         }
         return out;
@@ -2380,7 +2528,8 @@
 
       for (const item of entries) {
         const li = document.createElement('li');
-        const isActive = alarmAppEnabled && item.enabled !== false;
+        const isOn = item.enabled !== false;
+        const isActive = alarmAppEnabled && isOn;
         li.className = `alarm-summary-item${isActive ? '' : ' is-disabled'}`;
 
         const left = document.createElement('div');
@@ -2389,15 +2538,64 @@
         timeSpan.textContent = formatAlarmClock(item.time, use24h);
         const meta = document.createElement('div');
         meta.className = 'alarm-summary-meta';
-        meta.textContent = `${item.label} • ${formatAlarmDays(item.days, item.repeat)}`;
+        const statusTxt = isActive ? '' : (!alarmAppEnabled ? ' • App Off' : ' • Off');
+        const afterTxt = item.after_action === 'bible_votd_gentle'
+          ? ` • Gentle Bible Verse (${item.after_minutes || 5}m)`
+          : (item.after_action === 'bible_votd' ? ` • + Bible Verse (${item.after_minutes || 5}m)` : '');
+        meta.textContent = `${item.label} • ${formatAlarmDays(item.days, item.repeat)}${afterTxt}${statusTxt}`;
         left.append(timeSpan, meta);
 
-        const badge = document.createElement('span');
-        badge.className = 'diag-badge';
-        badge.setAttribute('data-state', isActive ? 'pass' : 'warn');
-        badge.textContent = isActive ? 'Active' : (!alarmAppEnabled ? 'App Off' : 'Paused');
+        const actions = document.createElement('div');
+        actions.className = 'alarm-summary-actions';
 
-        li.append(left, badge);
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'small';
+        editBtn.textContent = 'Edit';
+        editBtn.setAttribute('aria-label', `Edit ${formatAlarmClock(item.time, use24h)} ${item.label}`);
+        editBtn.addEventListener('click', () => {
+          window.__csPendingEditAlarmId = item.id;
+          selectedConfigAppId = 'alarm';
+          navigateTo('apps');
+          if (loadedAppSchemas.some((a) => a.app_id === 'alarm')) {
+            populateSelectedAppDropdown();
+            renderSelectedAppEditor();
+          } else {
+            loadCloudMetadata(false);
+          }
+        });
+
+        const swLbl = document.createElement('label');
+        swLbl.className = 'alarm-switch';
+        const swCb = document.createElement('input');
+        swCb.type = 'checkbox';
+        swCb.setAttribute('role', 'switch');
+        swCb.checked = isOn;
+        swCb.setAttribute('aria-label', `Toggle ${formatAlarmClock(item.time, use24h)} ${item.label}`);
+        const swTrack = document.createElement('span');
+        swTrack.className = 'alarm-switch-track';
+        swCb.addEventListener('change', async () => {
+          const nextEntries = entries.map((e) => (e.id === item.id ? { ...e, enabled: swCb.checked } : e));
+          if (!currentServerAppSettings.alarm) currentServerAppSettings.alarm = {};
+          currentServerAppSettings.alarm.alarms = nextEntries;
+          delete currentServerAppSettings.alarm.alarm_time;
+          delete currentServerAppSettings.alarm.alarm_days;
+          delete currentServerAppSettings.alarm.alarm_label;
+          if (swCb.checked) {
+            if (!currentEnabledApps) currentEnabledApps = new Set();
+            currentEnabledApps.add('alarm');
+            currentServerAppSettings.alarm.enabled = true;
+          }
+          if (selectedConfigAppId === 'alarm') {
+            renderSelectedAppEditor();
+          }
+          renderHomeAlarmsSummary();
+          await saveAllSettings(null);
+        });
+        swLbl.append(swCb, swTrack);
+
+        actions.append(editBtn, swLbl);
+        li.append(left, actions);
         listEl.appendChild(li);
       }
       listEl.hidden = false;
@@ -2620,11 +2818,22 @@
           showCtrl.appendChild(btn);
         }
       } else {
+        if (app.app_id === 'bible_votd') {
+          const tempBtn = document.createElement('button');
+          tempBtn.type = 'button';
+          tempBtn.className = 'small primary';
+          tempBtn.textContent = 'Show for 3 Min';
+          tempBtn.addEventListener('click', () => triggerAction('show_temp_app', {
+            app_id: app.app_id,
+            duration_sec: 180,
+          }));
+          showCtrl.appendChild(tempBtn);
+        }
         const showBtn = document.createElement('button');
         showBtn.type = 'button';
         showBtn.className = 'small';
         showBtn.dataset.previewApp = app.app_id;
-        showBtn.textContent = 'Show on Display';
+        showBtn.textContent = app.app_id === 'bible_votd' ? 'Pin on Display' : 'Show on Display';
         showBtn.addEventListener('click', () => triggerAction('set_app', { app_id: app.app_id }));
         showCtrl.appendChild(showBtn);
       }
@@ -3141,7 +3350,70 @@
             addBtn.id = `${cid}_add_btn`;
             addBtn.textContent = '+ Add Alarm';
 
-            addRow.append(timeWrap, lblWrap, sndWrap, thmWrap, addBtn);
+            const cancelEditBtn = document.createElement('button');
+            cancelEditBtn.type = 'button';
+            cancelEditBtn.className = 'small';
+            cancelEditBtn.id = `${cid}_cancel_btn`;
+            cancelEditBtn.textContent = 'Cancel';
+            cancelEditBtn.hidden = true;
+
+            const addBtnGroup = document.createElement('div');
+            addBtnGroup.style.display = 'flex';
+            addBtnGroup.style.gap = '0.35rem';
+            addBtnGroup.append(addBtn, cancelEditBtn);
+
+            addRow.append(timeWrap, lblWrap, sndWrap, thmWrap, addBtnGroup);
+
+            const afterRow = document.createElement('div');
+            afterRow.className = 'alarm-days-row';
+            afterRow.style.alignItems = 'flex-end';
+            afterRow.style.gap = '0.65rem';
+
+            const afterWrap = document.createElement('div');
+            afterWrap.className = 'field';
+            afterWrap.style.margin = '0';
+            afterWrap.style.minWidth = '195px';
+            const afterLbl = document.createElement('label');
+            afterLbl.htmlFor = `${cid}_add_after`;
+            afterLbl.textContent = 'After Alarm';
+            const afterSel = document.createElement('select');
+            afterSel.id = `${cid}_add_after`;
+            for (const [val, txt] of [
+              ['', 'Normal (Return to Clock)'],
+              ['bible_votd', 'Bible Verse After Dismiss'],
+              ['bible_votd_gentle', 'Gentle Chime + Bible Verse'],
+            ]) {
+              const opt = document.createElement('option');
+              opt.value = val;
+              opt.textContent = txt;
+              afterSel.appendChild(opt);
+            }
+            afterWrap.append(afterLbl, afterSel);
+
+            const afterMinWrap = document.createElement('div');
+            afterMinWrap.className = 'field';
+            afterMinWrap.style.margin = '0';
+            afterMinWrap.style.minWidth = '120px';
+            afterMinWrap.hidden = true;
+            const afterMinLbl = document.createElement('label');
+            afterMinLbl.htmlFor = `${cid}_add_after_min`;
+            afterMinLbl.textContent = 'Verse Duration';
+            const afterMinSel = document.createElement('select');
+            afterMinSel.id = `${cid}_add_after_min`;
+            for (const mins of [2, 3, 5, 10, 15, 30]) {
+              const opt = document.createElement('option');
+              opt.value = String(mins);
+              opt.textContent = `${mins} min`;
+              if (mins === 5) opt.selected = true;
+              afterMinSel.appendChild(opt);
+            }
+            afterMinWrap.append(afterMinLbl, afterMinSel);
+
+            const syncAfterUi = () => {
+              afterMinWrap.hidden = !afterSel.value;
+            };
+            afterSel.addEventListener('change', syncAfterUi);
+            afterRow.append(afterWrap, afterMinWrap);
 
             const repeatRow = document.createElement('div');
             repeatRow.className = 'alarm-days-row';
@@ -3154,7 +3426,7 @@
             repCb.checked = false;
             const repLbl = document.createElement('label');
             repLbl.htmlFor = repCb.id;
-            repLbl.textContent = 'Repeat (unchecked = rings once and auto-deletes)';
+            repLbl.textContent = 'Repeat (unchecked = rings once, then switches off)';
             repCheckWrap.append(repCb, repLbl);
             repeatRow.appendChild(repCheckWrap);
 
@@ -3248,6 +3520,59 @@
             tbl.append(thead, tbody);
             tblWrap.appendChild(tbl);
 
+            let editingIdx = -1;
+
+            const resetFormToAdd = () => {
+              editingIdx = -1;
+              tmInp.value = '07:00';
+              lbInp.value = '';
+              snSel.value = '';
+              thSel.value = '';
+              afterSel.value = '';
+              afterMinSel.value = '5';
+              syncAfterUi();
+              repCb.checked = false;
+              dayBoxes.forEach((c) => { c.checked = false; });
+              syncRepeatUi();
+              addBtn.textContent = '+ Add Alarm';
+              cancelEditBtn.hidden = true;
+            };
+
+            const startEditAlarm = (idx) => {
+              const item = entries[idx];
+              if (!item) return;
+              editingIdx = idx;
+              tmInp.value = normalizeAlarmTimeInput(item.time);
+              lbInp.value = item.label || '';
+              snSel.value = item.sound || '';
+              thSel.value = item.theme || '';
+              afterSel.value = item.after_action || '';
+              const mVal = String(item.after_minutes || 5);
+              if (!Array.from(afterMinSel.options).some((o) => o.value === mVal)) {
+                const extraOpt = document.createElement('option');
+                extraOpt.value = mVal;
+                extraOpt.textContent = `${mVal} min`;
+                afterMinSel.appendChild(extraOpt);
+              }
+              afterMinSel.value = mVal;
+              syncAfterUi();
+              const isRep = Boolean(item.repeat && Array.isArray(item.days) && item.days.length);
+              repCb.checked = isRep;
+              const dSet = new Set(Array.isArray(item.days) ? item.days : []);
+              dayBoxes.forEach((c) => { c.checked = isRep && dSet.has(c.value); });
+              syncRepeatUi();
+              addBtn.textContent = 'Save Alarm';
+              cancelEditBtn.hidden = false;
+              renderAlarmRows();
+              addRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+              tmInp.focus();
+            };
+
+            cancelEditBtn.addEventListener('click', () => {
+              resetFormToAdd();
+              renderAlarmRows();
+            });
+
             const renderAlarmRows = () => {
               container.dataset.entriesJson = JSON.stringify(entries);
               tbody.innerHTML = '';
@@ -3257,19 +3582,29 @@
 
               entries.forEach((item, idx) => {
                 const tr = document.createElement('tr');
+                const isOn = item.enabled !== false;
+                if (!isOn) tr.classList.add('alarm-row-disabled');
+                if (idx === editingIdx) tr.classList.add('alarm-row-editing');
 
                 const tdOn = document.createElement('td');
+                const swLbl = document.createElement('label');
+                swLbl.className = 'alarm-switch';
                 const onCb = document.createElement('input');
                 onCb.type = 'checkbox';
-                onCb.checked = item.enabled !== false;
+                onCb.setAttribute('role', 'switch');
+                onCb.checked = isOn;
                 onCb.setAttribute('aria-label', `Enable ${formatAlarmClock(item.time, use24h)} ${item.label}`);
+                const swTrack = document.createElement('span');
+                swTrack.className = 'alarm-switch-track';
                 onCb.addEventListener('change', () => {
                   entries[idx].enabled = onCb.checked;
                   container.dataset.entriesJson = JSON.stringify(entries);
                   snapshotCurrentAppEditor();
+                  renderAlarmRows();
                   renderHomeAlarmsSummary();
                 });
-                tdOn.appendChild(onCb);
+                swLbl.append(onCb, swTrack);
+                tdOn.appendChild(swLbl);
 
                 const thTime = document.createElement('th');
                 thTime.scope = 'row';
@@ -3277,6 +3612,16 @@
 
                 const tdLabel = document.createElement('td');
                 tdLabel.textContent = item.label || 'WAKE UP!';
+                if (item.after_action === 'bible_votd' || item.after_action === 'bible_votd_gentle') {
+                  const subNote = document.createElement('div');
+                  subNote.className = 'hint';
+                  subNote.style.margin = '0.15rem 0 0';
+                  const mins = item.after_minutes || 5;
+                  subNote.textContent = item.after_action === 'bible_votd_gentle'
+                    ? `Gentle Bible Verse (${mins}m)`
+                    : `+ Bible Verse (${mins}m)`;
+                  tdLabel.appendChild(subNote);
+                }
 
                 const tdDays = document.createElement('td');
                 tdDays.textContent = formatAlarmDays(item.days, item.repeat);
@@ -3302,6 +3647,16 @@
                 tdTheme.appendChild(rowThmSel);
 
                 const tdAct = document.createElement('td');
+                const actWrap = document.createElement('div');
+                actWrap.className = 'alarm-row-actions';
+
+                const editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.className = 'small';
+                editBtn.textContent = (idx === editingIdx) ? 'Editing' : 'Edit';
+                editBtn.setAttribute('aria-label', `Edit ${formatAlarmClock(item.time, use24h)} ${item.label}`);
+                editBtn.addEventListener('click', () => startEditAlarm(idx));
+
                 const delBtn = document.createElement('button');
                 delBtn.type = 'button';
                 delBtn.className = 'small danger';
@@ -3309,11 +3664,14 @@
                 delBtn.setAttribute('aria-label', `Remove ${formatAlarmClock(item.time, use24h)} ${item.label}`);
                 delBtn.addEventListener('click', () => {
                   entries.splice(idx, 1);
+                  if (editingIdx === idx) resetFormToAdd();
+                  else if (editingIdx > idx) editingIdx--;
                   renderAlarmRows();
                   snapshotCurrentAppEditor();
                   renderHomeAlarmsSummary();
                 });
-                tdAct.appendChild(delBtn);
+                actWrap.append(editBtn, delBtn);
+                tdAct.appendChild(actWrap);
 
                 tr.append(tdOn, thTime, tdLabel, tdDays, tdSound, tdTheme, tdAct);
                 tbody.appendChild(tr);
@@ -3335,26 +3693,49 @@
               const lVal = (lbInp.value || 'WAKE UP!').trim().slice(0, 24) || 'WAKE UP!';
               const sVal = snSel.value.trim();
               const thVal = thSel.value.trim();
-              entries.push({
-                id: `alarm_${Date.now().toString(36)}`,
-                enabled: true,
-                time: tVal,
-                repeat: isRep,
-                days: dVals,
-                label: lVal,
-                sound: sVal,
-                theme: thVal,
-              });
-              lbInp.value = '';
-              snSel.value = '';
-              thSel.value = '';
+              const afterVal = afterSel.value.trim();
+              const afterMinVal = Math.max(1, Math.min(60, Number(afterMinSel.value) || 5));
+              if (editingIdx >= 0 && editingIdx < entries.length) {
+                entries[editingIdx] = {
+                  ...entries[editingIdx],
+                  time: tVal,
+                  repeat: isRep,
+                  days: dVals,
+                  label: lVal,
+                  sound: sVal,
+                  theme: thVal,
+                  after_action: afterVal,
+                  after_minutes: afterMinVal,
+                };
+              } else {
+                entries.push({
+                  id: `alarm_${Date.now().toString(36)}`,
+                  enabled: true,
+                  time: tVal,
+                  repeat: isRep,
+                  days: dVals,
+                  label: lVal,
+                  sound: sVal,
+                  theme: thVal,
+                  after_action: afterVal,
+                  after_minutes: afterMinVal,
+                });
+              }
+              resetFormToAdd();
               renderAlarmRows();
               snapshotCurrentAppEditor();
               renderHomeAlarmsSummary();
             });
 
             renderAlarmRows();
-            container.append(addRow, repeatRow, daysWrap, addErr, emptyNote, tblWrap);
+            if (window.__csPendingEditAlarmId) {
+              const targetIdx = entries.findIndex((e) => e.id === window.__csPendingEditAlarmId);
+              window.__csPendingEditAlarmId = null;
+              if (targetIdx >= 0) {
+                setTimeout(() => startEditAlarm(targetIdx), 50);
+              }
+            }
+            container.append(addRow, afterRow, repeatRow, daysWrap, addErr, emptyNote, tblWrap);
             wrap.append(titleEl, container);
           } else {
             const lbl = document.createElement('label');
@@ -3727,19 +4108,20 @@
       return out;
     }
 
-    async function loadCloudMetadata(announceResult = false) {
+    async function loadCloudMetadata(announceResult = false, forceFresh = false) {
       cloudMetaRunning = true;
       syncBackgroundPolling();
       try {
-        const appsRes = await fetchWithTimeout('/api/local/apps', {}, 18000);
+        const appsRes = await fetchWithTimeout(forceFresh ? '/api/local/apps?fresh=1' : '/api/local/apps', {}, 18000);
         let cfgRes = null;
         try {
-          cfgRes = await fetchWithTimeout('/api/local/cloud-config', {}, 18000);
+          cfgRes = await fetchWithTimeout(forceFresh ? '/api/local/cloud-config?fresh=1' : '/api/local/cloud-config', {}, 18000);
         } catch (_) {
           cfgRes = null;
         }
         if (cfgRes && cfgRes.ok) {
           const cfgJson = await cfgRes.json();
+          cloudConfigLoaded = true;
           currentServerAppSettings = cfgJson.app_settings || {};
           currentServerAppSchedules = cfgJson.app_schedules || {};
           if (Array.isArray(cfgJson.enabled_apps)) {
@@ -3839,6 +4221,7 @@
       }
       const values = entries.map((e) => e.value);
       sel.value = values.includes(selected) ? selected : '';
+      if (sel.id === 'cfg-pinned-app') syncRotationUI();
     }
 
     const diagUrlInput = document.getElementById('diag-test-url');
@@ -3866,7 +4249,12 @@
       diagApplyBtn.hidden = !typed || typed === savedServerUrl;
     }
 
+    let lastAlarmRingingState = null;
+
     function updateTelemetry(st) {
+      const prevRinging = lastAlarmRingingState;
+      const nowRinging = Boolean(st.alarm_ringing);
+      lastAlarmRingingState = nowRinging;
       latestStatus = st;
       document.getElementById('pill-mode').textContent =
         st.ap_mode ? `Setup AP: ${st.ap_ssid}` : `Wi-Fi: ${st.wifi_ssid || 'Connecting'}`;
@@ -3874,6 +4262,11 @@
       document.getElementById('pill-device').textContent = `ID: ${st.device_id}`;
       document.getElementById('pill-app').textContent = `App: ${st.active_app || 'clock'}`;
       renderHomeAlarmsSummary();
+      if (prevRinging !== null && prevRinging !== nowRinging && !cloudMetaRunning) {
+        setTimeout(() => {
+          if (!cloudMetaRunning) loadCloudMetadata(false, true);
+        }, 1500);
+      }
 
       const api = st.api_status || {};
       const s = st.settings || {};
@@ -3956,15 +4349,23 @@
       const fwHint = document.getElementById('fw-version-hint');
       if (fwHint) fwHint.textContent = `Running ${fwText}`;
 
-      if (awaitingOtaResult && st.ota_status && st.ota_status !== 'checking') {
+      if (st.ota_status === 'updating') {
+        setBanner(`Firmware found. Updating to ${formatOtaVersionLabel(st.ota_detail)}...`, 'ok');
+        scheduleOtaFastPoll();
+      } else if (st.ota_status === 'rebooting') {
         awaitingOtaResult = false;
+        stopOtaFastPoll();
+        setBanner(`Firmware found. Updating to ${formatOtaVersionLabel(st.ota_detail)} — rebooting...`, 'ok');
+      } else if (awaitingOtaResult && st.ota_status && st.ota_status !== 'checking') {
+        awaitingOtaResult = false;
+        stopOtaFastPoll();
         if (st.ota_status === 'up_to_date') {
           setBanner(`Firmware is up to date (v${st.firmware_version || '?'}).`, 'ok');
-        } else if (st.ota_status === 'updating') {
-          setBanner(`Downloading firmware update ${st.ota_detail || ''}...`, 'ok');
         } else if (st.ota_status === 'error') {
           setBanner(`Firmware update check failed: ${st.ota_detail || 'unknown error'}`, 'err');
         }
+      } else if (!awaitingOtaResult && st.ota_status !== 'checking') {
+        stopOtaFastPoll();
       }
 
       const adcTxt = (typeof st.ambient_raw === 'number' && st.ambient_raw >= 0)
@@ -3976,7 +4377,16 @@
       }
       const prevHint = document.getElementById('preview-telemetry-hint');
       if (prevHint) {
-        prevHint.textContent = `Brightness: ${st.brightness ?? 128}/255 (${adcTxt}) • Volume: ${s.df_volume ?? 18}/30 • ${fwText}`;
+        let tempTxt = '';
+        if (st.temp_app) {
+          const rem = Number(st.temp_remaining_sec) || 0;
+          const m = Math.floor(rem / 60);
+          const sec = rem % 60;
+          const remLabel = m > 0 ? `${m}m ${String(sec).padStart(2, '0')}s` : `${sec}s`;
+          const appName = st.temp_app === 'bible_votd' ? 'Bible Verse' : st.temp_app;
+          tempTxt = ` • Timed: ${appName} (${remLabel} left)`;
+        }
+        prevHint.textContent = `Brightness: ${st.brightness ?? 128}/255 (${adcTxt}) • Volume: ${s.df_volume ?? 18}/30 • ${fwText}${tempTxt}`;
       }
 
       populateAppSelect(quickAppSel, getEffectivePinApps(st.available_apps), st.pinned_app);
@@ -4279,10 +4689,12 @@
         third_folder: Number(document.getElementById('cfg-third-folder').value),
         third_track: Number(document.getElementById('cfg-third-track').value),
         pinned_app: document.getElementById('cfg-pinned-app').value,
-        selection_mode: selectionModeSel.value === 'rotate' ? 'rotate' : 'priority',
-        rotation_seconds: Number(rotationSecInp.value || 20),
-        rotate_include_clock: rotateClockChk.checked,
       };
+      if (cloudConfigLoaded) {
+        payload.selection_mode = selectionModeSel.value === 'rotate' ? 'rotate' : 'priority';
+        payload.rotation_seconds = Number(rotationSecInp.value || 20);
+        payload.rotate_include_clock = rotateClockChk.checked;
+      }
       const enabledArr = collectEnabledApps();
       if (enabledArr !== undefined) {
         payload.enabled_apps = enabledArr;
@@ -4336,12 +4748,15 @@
       if ('third_track' in s) document.getElementById('cfg-third-track').value = Number(s.third_track);
       if (typeof s.selection_mode === 'string') {
         selectionModeSel.value = s.selection_mode === 'rotate' ? 'rotate' : 'priority';
+        cloudConfigLoaded = true;
       }
       if ('rotation_seconds' in s) {
         rotationSecInp.value = String(Number(s.rotation_seconds));
+        cloudConfigLoaded = true;
       }
       if ('rotate_include_clock' in s) {
         rotateClockChk.checked = Boolean(s.rotate_include_clock);
+        cloudConfigLoaded = true;
       }
       syncRotationUI();
       if (Array.isArray(s.enabled_apps)) {
@@ -4359,6 +4774,7 @@
       if (typeof s.pinned_app === 'string') {
         document.getElementById('cfg-pinned-app').value = s.pinned_app;
         quickAppSel.value = s.pinned_app;
+        syncRotationUI();
       }
     }
 
@@ -4382,12 +4798,25 @@
       if (triggerBtn) triggerBtn.disabled = true;
       try {
         const payload = collectSettingsPayload();
-        const res = await fetch('/api/local/settings', {
+        let res = await fetch('/api/local/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        const data = await res.json();
+        let data = await res.json().catch(() => ({}));
+        if (res.status === 403 && data.error === 'admin_pin_required') {
+          const unlocked = await promptAdminPinUnlock();
+          if (!unlocked) {
+            setBanner('Unlock cancelled — Server URL was not changed.', 'err');
+            return;
+          }
+          res = await fetch('/api/local/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          data = await res.json().catch(() => ({}));
+        }
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         savedServerUrl = payload.api_base_url || '';
         document.getElementById('diag-saved-url').textContent = savedServerUrl || '(unset)';
@@ -4437,27 +4866,120 @@
       pendingAction = '';
     });
 
+    const pinDialog = document.getElementById('admin-pin-dialog');
+    const pinForm = document.getElementById('admin-pin-form');
+    const pinInput = document.getElementById('admin-pin-input');
+    const pinErr = document.getElementById('admin-pin-err');
+
+    function promptAdminPinUnlock() {
+      return new Promise(async (resolve) => {
+        let settled = false;
+        let pollId = null;
+        const finish = (ok) => {
+          if (settled) return;
+          settled = true;
+          if (pollId) clearInterval(pollId);
+          pinForm.removeEventListener('submit', onSubmit);
+          pinDialog.removeEventListener('close', onClose);
+          if (pinDialog.open) pinDialog.close();
+          resolve(ok);
+        };
+        const onClose = () => finish(false);
+        const onSubmit = async (e) => {
+          e.preventDefault();
+          const code = (pinInput.value || '').trim();
+          if (!/^\d{4}$/.test(code)) {
+            pinErr.textContent = 'Enter the 4-digit PIN shown on the display.';
+            pinErr.style.display = 'block';
+            return;
+          }
+          try {
+            const r = await fetch('/api/local/admin-pin/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pin: code }),
+            });
+            if (r.ok) {
+              finish(true);
+            } else {
+              pinErr.textContent = 'Incorrect or expired PIN. Try again or press the device knob.';
+              pinErr.style.display = 'block';
+              pinInput.select();
+            }
+          } catch (err) {
+            pinErr.textContent = `Verify failed: ${err.message}`;
+            pinErr.style.display = 'block';
+          }
+        };
+
+        try {
+          await fetch('/api/local/admin-pin/request', { method: 'POST' });
+        } catch (_) {}
+        pinInput.value = '';
+        pinErr.textContent = '';
+        pinErr.style.display = 'none';
+        pinForm.addEventListener('submit', onSubmit);
+        pinDialog.addEventListener('close', onClose);
+        document.getElementById('btn-pin-cancel').onclick = () => finish(false);
+        pinDialog.showModal();
+        pinInput.focus();
+
+        pollId = setInterval(async () => {
+          try {
+            const r = await fetch('/api/local/status', { cache: 'no-store' });
+            if (r.ok) {
+              const st = await r.json();
+              if (st.admin_unlocked) finish(true);
+            }
+          } catch (_) {}
+        }, 1500);
+      });
+    }
+
     async function triggerAction(action, extra = {}) {
       try {
-        const res = await fetch('/api/local/action', {
+        let res = await fetch('/api/local/action', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action, ...extra }),
         });
+        if (res.status === 403) {
+          const errBody = await res.json().catch(() => ({}));
+          if (errBody.error === 'admin_pin_required') {
+            const unlocked = await promptAdminPinUnlock();
+            if (!unlocked) {
+              setBanner('Unlock cancelled.', 'err');
+              return;
+            }
+            res = await fetch('/api/local/action', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action, ...extra }),
+            });
+          }
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         if (action === 'refresh') {
           setBanner('Display refresh requested.', 'ok');
           setTimeout(fetchPreviewFrame, 350);
         } else if (action === 'check_ota') {
           awaitingOtaResult = true;
-          setBanner('Checking firmware update server...', 'ok');
+          setBanner('Checking for firmware update...', 'ok');
+          scheduleOtaFastPoll();
+          setTimeout(() => { loadStatus().catch(() => {}); }, 350);
         } else if (action === 'set_app') {
           const slotKey = extra.screen_id
             ? `${extra.app_id}:${extra.screen_id}`
             : (extra.app_id || '');
           document.getElementById('cfg-pinned-app').value = slotKey;
           quickAppSel.value = slotKey;
+          syncRotationUI();
           setBanner(slotKey ? `Switched screen to "${slotKey}".` : 'Switched to Auto Schedule.', 'ok');
+          setTimeout(fetchPreviewFrame, 450);
+        } else if (action === 'show_temp_app') {
+          const mins = Math.max(1, Math.round((Number(extra.duration_sec) || 180) / 60));
+          const label = extra.app_id === 'bible_votd' ? 'Verse of the Day' : (extra.app_id || 'screen');
+          setBanner(`Showing ${label} for ${mins} min (returns to Auto automatically).`, 'ok');
           setTimeout(fetchPreviewFrame, 450);
         } else if (action === 'set_brightness') {
           setBanner(extra.brightness < 0 ? 'Auto-brightness enabled.' : `Brightness set to ${extra.brightness}/255.`, 'ok');
@@ -4534,6 +5056,10 @@
     document.getElementById('btn-play-fight').addEventListener('click', () => triggerAction('play_fight_song'));
     document.getElementById('btn-play-victory').addEventListener('click', () => triggerAction('play_victory_song'));
     document.getElementById('btn-play-third').addEventListener('click', () => triggerAction('play_third_song'));
+    document.getElementById('btn-show-votd').addEventListener('click', () => triggerAction('show_temp_app', {
+      app_id: 'bible_votd',
+      duration_sec: 180,
+    }));
     document.getElementById('btn-test-boot').addEventListener('click', () => triggerAction('test_boot_tone'));
     document.getElementById('btn-test-chime').addEventListener('click', () => triggerAction('test_chime'));
     document.getElementById('btn-stop-audio').addEventListener('click', () => triggerAction('stop_audio'));

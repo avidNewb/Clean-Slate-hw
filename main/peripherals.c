@@ -22,36 +22,64 @@ static volatile uint8_t s_max_clicks = 3;
 
 #ifdef CONFIG_CS_ENABLE_ENCODER
 /* Gray-code quadrature transitions matching (old_ab << 2) | new_ab */
-static const DRAM_ATTR int8_t k_qdec_lut[16] = {
+static const int8_t k_qdec_lut[16] = {
      0,  1, -1,  0,
     -1,  0,  0,  1,
      1,  0,  0, -1,
      0, -1,  1,  0
 };
-static volatile uint8_t s_enc_old_ab = 0;
-static volatile uint8_t s_enc_rest_ab = 0;
-static volatile int8_t s_enc_accum = 0;
-static volatile int64_t s_enc_last_edge_us = 0;
+static esp_timer_handle_t s_enc_timer = NULL;
+static uint8_t s_enc_stable_ab = 0;
+static uint8_t s_enc_cand_ab = 0;
+static uint8_t s_enc_cand_cnt = 0;
+static uint8_t s_enc_rest_ab = 0;
+static int8_t s_enc_accum = 0;
+static int64_t s_enc_last_edge_us = 0;
+static volatile bool s_enc_adc_mask = false;
 
-static void IRAM_ATTR enc_gpio_isr(void *arg)
+/*
+ * Classic ESP32 Silicon Errata 3.11: GPIO 36 (SENSOR_VP) and GPIO 39 (SENSOR_VN)
+ * suffer brief (sub-100 us) spurious low pulses whenever ADC1 or Wi-Fi is active.
+ * Polling at 1 kHz with a 2-consecutive-sample (2 ms) stability requirement plus
+ * masking during ADC1 reads completely eliminates phantom rotary ticks while
+ * keeping real hand turns crisp and responsive.
+ */
+static void enc_poll_timer_cb(void *arg)
 {
     (void)arg;
-    uint8_t ab = (uint8_t)((gpio_get_level(CS_PIN_ENCODER_A) << 1) |
-                           gpio_get_level(CS_PIN_ENCODER_B));
-    if (ab == s_enc_old_ab) {
-        return;
-    }
-    /* Reject <2 us ADC1 / Wi-Fi coupling spikes on classic ESP32 GPIOs 36/39 */
-    esp_rom_delay_us(2);
-    uint8_t ab2 = (uint8_t)((gpio_get_level(CS_PIN_ENCODER_A) << 1) |
-                            gpio_get_level(CS_PIN_ENCODER_B));
-    if (ab != ab2) {
+    if (s_enc_adc_mask) {
         return;
     }
 
+    uint8_t ab = (uint8_t)((gpio_get_level(CS_PIN_ENCODER_A) << 1) |
+                           gpio_get_level(CS_PIN_ENCODER_B));
     int64_t now_us = esp_timer_get_time();
-    if ((now_us - s_enc_last_edge_us) >= 250000LL && (ab == 0U || ab == 3U)) {
-        /* Clear stale remainder only after an extended idle pause at a resting detent */
+
+    if (ab == s_enc_stable_ab) {
+        s_enc_cand_ab = ab;
+        s_enc_cand_cnt = 0;
+        /* Expire any stale partial accumulation after 120 ms idle at a resting detent */
+        if (s_enc_accum != 0 && (now_us - s_enc_last_edge_us) >= 120000LL &&
+            (ab == 0U || ab == 3U)) {
+            s_enc_accum = 0;
+            s_enc_rest_ab = ab;
+        }
+        return;
+    }
+
+    if (ab != s_enc_cand_ab) {
+        s_enc_cand_ab = ab;
+        s_enc_cand_cnt = 1;
+        return;
+    }
+
+    if (++s_enc_cand_cnt < 2U) {
+        return;
+    }
+
+    /* State held steady across 2 consecutive 1 ms samples -> accept transition */
+    s_enc_cand_cnt = 0;
+    if ((now_us - s_enc_last_edge_us) >= 120000LL && (ab == 0U || ab == 3U)) {
         if (ab == s_enc_rest_ab || s_enc_accum == 0 ||
             (s_enc_rest_ab != 0U && s_enc_rest_ab != 3U)) {
             s_enc_accum = 0;
@@ -59,8 +87,8 @@ static void IRAM_ATTR enc_gpio_isr(void *arg)
         }
     }
 
-    int8_t step = k_qdec_lut[(s_enc_old_ab << 2) | ab];
-    s_enc_old_ab = ab;
+    int8_t step = k_qdec_lut[(s_enc_stable_ab << 2) | ab];
+    s_enc_stable_ab = ab;
     if (step == 0) {
         return;
     }
@@ -68,35 +96,30 @@ static void IRAM_ATTR enc_gpio_isr(void *arg)
     s_enc_last_edge_us = now_us;
     int8_t accum = (int8_t)(s_enc_accum + step);
 
-    /* Recover a skipped edge when completing a full cycle back to the resting detent */
+    /* Only recover a single missed edge (3 of 4) on return to the resting detent */
     if (ab == s_enc_rest_ab) {
-        if (accum >= 2 && accum < 4) {
+        if (accum == 3) {
             accum = 4;
-        } else if (accum <= -2 && accum > -4) {
+        } else if (accum == -3) {
             accum = -4;
         }
     }
 
-    BaseType_t hpw = pdFALSE;
     while (accum >= 4) {
         accum -= 4;
         if (s_event_queue) {
             cs_input_event_t ev = { .type = CS_INPUT_ENC_CW, .delta = 1 };
-            xQueueSendFromISR(s_event_queue, &ev, &hpw);
+            xQueueSend(s_event_queue, &ev, 0);
         }
     }
     while (accum <= -4) {
         accum += 4;
         if (s_event_queue) {
             cs_input_event_t ev = { .type = CS_INPUT_ENC_CCW, .delta = -1 };
-            xQueueSendFromISR(s_event_queue, &ev, &hpw);
+            xQueueSend(s_event_queue, &ev, 0);
         }
     }
     s_enc_accum = accum;
-
-    if (hpw) {
-        portYIELD_FROM_ISR();
-    }
 }
 #endif
 
@@ -213,11 +236,21 @@ static void peripherals_task(void *arg)
         if ((now_ms - last_adc_ms) >= 200) {
             last_adc_ms = now_ms;
             int raw_adc = 0;
-            if (s_adc_handle && adc_oneshot_read(s_adc_handle, CS_LIGHT_ADC_CHANNEL, &raw_adc) == ESP_OK) {
-                if (s_ambient_ema < 0) {
-                    s_ambient_ema = raw_adc;
-                } else {
-                    s_ambient_ema = (s_ambient_ema * 7 + raw_adc) / 8;
+            if (s_adc_handle) {
+#ifdef CONFIG_CS_ENABLE_ENCODER
+                s_enc_adc_mask = true;
+#endif
+                esp_err_t adc_err = adc_oneshot_read(s_adc_handle, CS_LIGHT_ADC_CHANNEL, &raw_adc);
+#ifdef CONFIG_CS_ENABLE_ENCODER
+                esp_rom_delay_us(100);
+                s_enc_adc_mask = false;
+#endif
+                if (adc_err == ESP_OK) {
+                    if (s_ambient_ema < 0) {
+                        s_ambient_ema = raw_adc;
+                    } else {
+                        s_ambient_ema = (s_ambient_ema * 7 + raw_adc) / 8;
+                    }
                 }
             }
         }
@@ -232,30 +265,35 @@ esp_err_t peripherals_init(QueueHandle_t *out_event_queue)
     s_event_queue = xQueueCreate(32, sizeof(cs_input_event_t));
     ESP_RETURN_ON_FALSE(s_event_queue != NULL, ESP_ERR_NO_MEM, TAG, "event queue alloc failed");
 
-#if defined(CONFIG_CS_ENABLE_BUTTON) || defined(CONFIG_CS_ENABLE_ENCODER)
+#ifdef CONFIG_CS_ENABLE_BUTTON
     esp_err_t isr_err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
     if (isr_err != ESP_OK && isr_err != ESP_ERR_INVALID_STATE) {
         return isr_err;
     }
-#endif
-
-#ifdef CONFIG_CS_ENABLE_BUTTON
     configure_input_only_gpio(CS_PIN_BUTTON, GPIO_INTR_ANYEDGE);
 #endif
 
 #ifdef CONFIG_CS_ENABLE_ENCODER
-    configure_input_only_gpio(CS_PIN_ENCODER_A, GPIO_INTR_ANYEDGE);
-    configure_input_only_gpio(CS_PIN_ENCODER_B, GPIO_INTR_ANYEDGE);
-    s_enc_old_ab = (uint8_t)((gpio_get_level(CS_PIN_ENCODER_A) << 1) |
-                             gpio_get_level(CS_PIN_ENCODER_B));
-    s_enc_rest_ab = s_enc_old_ab;
+    configure_input_only_gpio(CS_PIN_ENCODER_A, GPIO_INTR_DISABLE);
+    configure_input_only_gpio(CS_PIN_ENCODER_B, GPIO_INTR_DISABLE);
+    s_enc_stable_ab = (uint8_t)((gpio_get_level(CS_PIN_ENCODER_A) << 1) |
+                                gpio_get_level(CS_PIN_ENCODER_B));
+    s_enc_cand_ab = s_enc_stable_ab;
+    s_enc_cand_cnt = 0;
+    s_enc_rest_ab = s_enc_stable_ab;
     s_enc_accum = 0;
     s_enc_last_edge_us = esp_timer_get_time();
-    ESP_RETURN_ON_ERROR(gpio_isr_handler_add(CS_PIN_ENCODER_A, enc_gpio_isr, NULL),
-                        TAG, "encoder A ISR add failed");
-    ESP_RETURN_ON_ERROR(gpio_isr_handler_add(CS_PIN_ENCODER_B, enc_gpio_isr, NULL),
-                        TAG, "encoder B ISR add failed");
-    ESP_LOGI(TAG, "Rotary encoder GPIO interrupt 4x enabled on GPIO %d / %d",
+    const esp_timer_create_args_t enc_timer_args = {
+        .callback = enc_poll_timer_cb,
+        .name = "enc_poll",
+        .dispatch_method = ESP_TIMER_TASK,
+        .skip_unhandled_events = true,
+    };
+    ESP_RETURN_ON_ERROR(esp_timer_create(&enc_timer_args, &s_enc_timer),
+                        TAG, "encoder poll timer create failed");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_enc_timer, 1000),
+                        TAG, "encoder poll timer start failed");
+    ESP_LOGI(TAG, "Rotary encoder 1kHz debounced polling enabled on GPIO %d / %d",
              CS_PIN_ENCODER_A, CS_PIN_ENCODER_B);
 #endif
 

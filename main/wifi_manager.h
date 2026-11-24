@@ -76,6 +76,11 @@ const char *wifi_manager_get_device_id(void);
 const char *wifi_manager_get_ap_ssid(void);
 
 /**
+ * Get Captive Portal SoftAP WPA2 passphrase (e.g. "CS-A1B2C3").
+ */
+const char *wifi_manager_get_ap_password(void);
+
+/**
  * Get currently configured STA SSID.
  */
 void wifi_manager_get_sta_ssid(char *buf, size_t buf_len);

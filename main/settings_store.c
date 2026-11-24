@@ -184,6 +184,7 @@ esp_err_t settings_store_init(void)
         nvs_read_str_opt(h, "q_start", tmp.quiet_start, sizeof(tmp.quiet_start));
         nvs_read_str_opt(h, "q_end", tmp.quiet_end, sizeof(tmp.quiet_end));
         nvs_read_str_opt(h, "pin_app", tmp.pinned_app, sizeof(tmp.pinned_app));
+        nvs_read_str_opt(h, "dev_tok", tmp.device_token, sizeof(tmp.device_token));
 
         uint8_t u8 = 0;
         uint16_t u16 = 0;
@@ -245,22 +246,78 @@ esp_err_t settings_store_init(void)
         if (nvs_get_u8(h, "sync_pend", &u8) == ESP_OK) {
             tmp.cloud_sync_pending = (u8 != 0);
         }
+        typedef struct {
+            bool enabled;
+            bool repeat;
+            uint8_t hour;
+            uint8_t minute;
+            uint8_t days_mask;
+            uint8_t folder;
+            uint8_t track;
+            uint8_t theme_id;
+            char id[25];
+            char label[25];
+        } cs_alarm_item_v2_t;
+        typedef struct {
+            bool app_enabled;
+            bool allow_during_quiet_hours;
+            bool use_24h;
+            uint8_t duration_minutes;
+            uint8_t volume;
+            uint8_t count;
+            cs_alarm_item_v2_t items[CS_MAX_LOCAL_ALARMS];
+            uint8_t pending_delete_count;
+            char pending_delete_ids[CS_MAX_LOCAL_ALARMS][25];
+        } cs_alarm_schedule_v2_t;
+
         cs_alarm_schedule_t loaded_alarms;
         memset(&loaded_alarms, 0, sizeof(loaded_alarms));
         loaded_alarms.allow_during_quiet_hours = true;
         loaded_alarms.duration_minutes = 2;
         loaded_alarms.volume = 26;
         size_t blob_len = sizeof(loaded_alarms);
-        if (nvs_get_blob(h, "alarms_v2", &loaded_alarms, &blob_len) == ESP_OK &&
+        if (nvs_get_blob(h, "alarms_v3", &loaded_alarms, &blob_len) == ESP_OK &&
             blob_len == sizeof(loaded_alarms) &&
             loaded_alarms.count <= CS_MAX_LOCAL_ALARMS &&
             loaded_alarms.pending_delete_count <= CS_MAX_LOCAL_ALARMS) {
             s_alarms = loaded_alarms;
         } else {
+            cs_alarm_schedule_v2_t v2;
+            size_t v2_len = sizeof(v2);
             memset(&s_alarms, 0, sizeof(s_alarms));
             s_alarms.allow_during_quiet_hours = true;
             s_alarms.duration_minutes = 2;
             s_alarms.volume = 26;
+            if (nvs_get_blob(h, "alarms_v2", &v2, &v2_len) == ESP_OK &&
+                v2_len == sizeof(v2) &&
+                v2.count <= CS_MAX_LOCAL_ALARMS &&
+                v2.pending_delete_count <= CS_MAX_LOCAL_ALARMS) {
+                s_alarms.app_enabled = v2.app_enabled;
+                s_alarms.allow_during_quiet_hours = v2.allow_during_quiet_hours;
+                s_alarms.use_24h = v2.use_24h;
+                s_alarms.duration_minutes = v2.duration_minutes;
+                s_alarms.volume = v2.volume;
+                s_alarms.count = v2.count;
+                for (uint8_t i = 0; i < v2.count; i++) {
+                    s_alarms.items[i].enabled = v2.items[i].enabled;
+                    s_alarms.items[i].repeat = v2.items[i].repeat;
+                    s_alarms.items[i].hour = v2.items[i].hour;
+                    s_alarms.items[i].minute = v2.items[i].minute;
+                    s_alarms.items[i].days_mask = v2.items[i].days_mask;
+                    s_alarms.items[i].folder = v2.items[i].folder;
+                    s_alarms.items[i].track = v2.items[i].track;
+                    s_alarms.items[i].theme_id = v2.items[i].theme_id;
+                    memcpy(s_alarms.items[i].id, v2.items[i].id, sizeof(s_alarms.items[i].id));
+                    memcpy(s_alarms.items[i].label, v2.items[i].label, sizeof(s_alarms.items[i].label));
+                    s_alarms.items[i].post_action = CS_ALARM_POST_NONE;
+                    s_alarms.items[i].post_minutes = 5;
+                }
+                s_alarms.pending_delete_count = v2.pending_delete_count;
+                memcpy(s_alarms.pending_delete_ids, v2.pending_delete_ids,
+                       sizeof(s_alarms.pending_delete_ids));
+                ESP_LOGI(TAG, "Migrated %u local alarm(s) from alarms_v2 to alarms_v3",
+                         (unsigned)s_alarms.count);
+            }
         }
         nvs_close(h);
     } else {
@@ -386,7 +443,7 @@ esp_err_t settings_store_save(const cs_local_settings_t *in)
     bool dirty_bright_mx, dirty_df_vol, dirty_df_eq, dirty_boot_snd;
     bool dirty_chime_snd, dirty_rot_idle, dirty_poll_sec, dirty_ota_en;
     bool dirty_fg_fld, dirty_fg_trk, dirty_vc_fld, dirty_vc_trk;
-    bool dirty_th_fld, dirty_th_trk, dirty_pin_app, dirty_sync_pend;
+    bool dirty_th_fld, dirty_th_trk, dirty_pin_app, dirty_dev_tok, dirty_sync_pend;
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool diff_mode = s_nvs_has_baseline;
@@ -417,6 +474,7 @@ esp_err_t settings_store_save(const cs_local_settings_t *in)
     dirty_th_fld    = (!diff_mode || clean.third_folder != s_cfg.third_folder);
     dirty_th_trk    = (!diff_mode || clean.third_track != s_cfg.third_track);
     dirty_pin_app   = (!diff_mode || strcmp(clean.pinned_app, s_cfg.pinned_app) != 0);
+    dirty_dev_tok   = (!diff_mode || strcmp(clean.device_token, s_cfg.device_token) != 0);
     dirty_sync_pend = (!diff_mode || clean.cloud_sync_pending != s_cfg.cloud_sync_pending);
     xSemaphoreGive(s_mutex);
 
@@ -427,7 +485,7 @@ esp_err_t settings_store_save(const cs_local_settings_t *in)
         dirty_bright_mx || dirty_df_vol || dirty_df_eq || dirty_boot_snd ||
         dirty_chime_snd || dirty_rot_idle || dirty_poll_sec || dirty_ota_en ||
         dirty_fg_fld || dirty_fg_trk || dirty_vc_fld || dirty_vc_trk ||
-        dirty_th_fld || dirty_th_trk || dirty_pin_app || dirty_sync_pend;
+        dirty_th_fld || dirty_th_trk || dirty_pin_app || dirty_dev_tok || dirty_sync_pend;
 
     if (!any_dirty) {
         return ESP_OK;
@@ -464,6 +522,7 @@ esp_err_t settings_store_save(const cs_local_settings_t *in)
     if (err == ESP_OK && dirty_th_fld)    err = nvs_set_u8(h, "th_fld", clean.third_folder);
     if (err == ESP_OK && dirty_th_trk)    err = nvs_set_u16(h, "th_trk", clean.third_track);
     if (err == ESP_OK && dirty_pin_app)   err = nvs_set_str(h, "pin_app", clean.pinned_app);
+    if (err == ESP_OK && dirty_dev_tok)   err = nvs_set_str(h, "dev_tok", clean.device_token);
     if (err == ESP_OK && dirty_sync_pend) err = nvs_set_u8(h, "sync_pend", clean.cloud_sync_pending ? 1U : 0U);
     if (err == ESP_OK) err = nvs_commit(h);
 
@@ -707,6 +766,25 @@ void settings_store_parse_alarms_json(bool app_enabled,
                 json_as_str(fv, ithm, sizeof(ithm));
             }
             it->theme_id = parse_theme_id(ithm, def_theme);
+
+            char iafter[24] = {0};
+            it->post_action = CS_ALARM_POST_NONE;
+            if (json_obj_get(item_obj, "after_action", &fv) && json_as_str(fv, iafter, sizeof(iafter))) {
+                if (strcasecmp(iafter, "bible_votd_gentle") == 0) {
+                    it->post_action = CS_ALARM_POST_BIBLE_VOTD_GENTLE;
+                } else if (strcasecmp(iafter, "bible_votd") == 0) {
+                    it->post_action = CS_ALARM_POST_BIBLE_VOTD;
+                }
+            }
+            it->post_minutes = 5;
+            if (json_obj_get(item_obj, "after_minutes", &fv) && json_as_int(fv, &iv)) {
+                if (iv < 1) {
+                    iv = 1;
+                } else if (iv > 60) {
+                    iv = 60;
+                }
+                it->post_minutes = (uint8_t)iv;
+            }
             out->count++;
         }
         return;
@@ -761,7 +839,7 @@ static esp_err_t persist_alarms_blob(const cs_alarm_schedule_t *clean)
 {
     nvs_handle_t h = 0;
     ESP_RETURN_ON_ERROR(nvs_open(NVS_NS, NVS_READWRITE, &h), TAG, "nvs_open alarms failed");
-    esp_err_t err = nvs_set_blob(h, "alarms_v2", clean, sizeof(*clean));
+    esp_err_t err = nvs_set_blob(h, "alarms_v3", clean, sizeof(*clean));
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }
@@ -804,23 +882,15 @@ esp_err_t settings_store_save_alarms(const cs_alarm_schedule_t *in)
 
     bool changed = false;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    /* Preserve pending cloud deletes and strip any still-pending IDs from incoming sync */
+    /* Preserve pending cloud one-time alarm disables so concurrent GET /config never re-enables them */
     clean.pending_delete_count = s_alarms.pending_delete_count;
     memcpy(clean.pending_delete_ids, s_alarms.pending_delete_ids, sizeof(clean.pending_delete_ids));
     if (clean.pending_delete_count > 0U) {
-        uint8_t w = 0;
         for (uint8_t i = 0; i < clean.count; i++) {
-            if (!is_pending_delete(&clean, clean.items[i].id)) {
-                if (w != i) {
-                    clean.items[w] = clean.items[i];
-                }
-                w++;
+            if (!clean.items[i].repeat && is_pending_delete(&clean, clean.items[i].id)) {
+                clean.items[i].enabled = false;
             }
         }
-        for (uint8_t i = w; i < CS_MAX_LOCAL_ALARMS; i++) {
-            memset(&clean.items[i], 0, sizeof(clean.items[i]));
-        }
-        clean.count = w;
     }
 
     if (memcmp(&s_alarms, &clean, sizeof(clean)) != 0) {
@@ -853,21 +923,14 @@ esp_err_t settings_store_consume_onetime_alarm(const char *alarm_id)
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     updated = s_alarms;
-    uint8_t w = 0;
     for (uint8_t i = 0; i < updated.count && i < CS_MAX_LOCAL_ALARMS; i++) {
         if (strcmp(updated.items[i].id, alarm_id) == 0 && !updated.items[i].repeat) {
-            changed = true;
-            continue;
+            if (updated.items[i].enabled) {
+                updated.items[i].enabled = false;
+                changed = true;
+            }
         }
-        if (w != i) {
-            updated.items[w] = updated.items[i];
-        }
-        w++;
     }
-    for (uint8_t i = w; i < CS_MAX_LOCAL_ALARMS; i++) {
-        memset(&updated.items[i], 0, sizeof(updated.items[i]));
-    }
-    updated.count = w;
 
     if (!is_pending_delete(&updated, alarm_id) && updated.pending_delete_count < CS_MAX_LOCAL_ALARMS) {
         snprintf(updated.pending_delete_ids[updated.pending_delete_count],
@@ -883,8 +946,25 @@ esp_err_t settings_store_consume_onetime_alarm(const char *alarm_id)
     if (!changed) {
         return ESP_OK;
     }
-    ESP_LOGI(TAG, "Auto-deleted one-time alarm \"%s\" locally (queued cloud delete)", alarm_id);
+    ESP_LOGI(TAG, "Auto-disabled one-time alarm \"%s\" locally (queued cloud disable)", alarm_id);
     return persist_alarms_blob(&updated);
+}
+
+esp_err_t settings_store_clear_all_pending_alarm_deletes(void)
+{
+    ESP_RETURN_ON_FALSE(s_mutex != NULL, ESP_ERR_INVALID_STATE, TAG, "not initialized");
+    cs_alarm_schedule_t updated;
+    bool changed = false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    updated = s_alarms;
+    if (updated.pending_delete_count > 0U) {
+        updated.pending_delete_count = 0;
+        memset(updated.pending_delete_ids, 0, sizeof(updated.pending_delete_ids));
+        s_alarms = updated;
+        changed = true;
+    }
+    xSemaphoreGive(s_mutex);
+    return changed ? persist_alarms_blob(&updated) : ESP_OK;
 }
 
 esp_err_t settings_store_clear_pending_alarm_delete(const char *alarm_id)
@@ -989,4 +1069,26 @@ void settings_store_get_api_base_url(char *out, size_t out_cap)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     snprintf(out, out_cap, "%s", s_cfg.api_base_url);
     xSemaphoreGive(s_mutex);
+}
+
+void settings_store_get_device_token(char *out, size_t out_cap)
+{
+    if (!out || out_cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!s_mutex) {
+        return;
+    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    snprintf(out, out_cap, "%s", s_cfg.device_token);
+    xSemaphoreGive(s_mutex);
+}
+
+esp_err_t settings_store_set_device_token(const char *token)
+{
+    cs_local_settings_t cur;
+    settings_store_get(&cur);
+    snprintf(cur.device_token, sizeof(cur.device_token), "%s", token ? token : "");
+    return settings_store_save(&cur);
 }

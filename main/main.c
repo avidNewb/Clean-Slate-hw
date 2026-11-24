@@ -9,6 +9,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -64,6 +65,8 @@ typedef struct {
     size_t rotary_slot_count;
     int selected_app_idx; /* -1 = Auto schedule, >= 0 = rotary_slots[idx] */
     char manual_pinned_slot[64];
+    char temp_override_slot[64];
+    int64_t temp_override_until_us;
     bool rotary_override_active;
     int64_t last_rotary_us;
     local_menu_page_t menu_page;
@@ -74,6 +77,9 @@ typedef struct {
     int64_t last_menu_us;
     char toast_text[24];
     int64_t toast_until_us;
+    char admin_pin[8];
+    int64_t admin_pin_until_us;
+    int64_t admin_unlocked_until_us;
     bool auto_brightness;
     bool has_frame;
     bool last_quiet_mode;
@@ -206,9 +212,9 @@ static void format_app_short_label(const char *app_id, char *out, size_t cap)
             if (strcmp(scr_part, "scoreboard") == 0) {
                 src = (strcmp(app_part, "cbb_scoreboard") == 0) ? "CBB SCORES" : "CFB SCORES";
             } else if (strcmp(scr_part, "countdown_time") == 0) {
-                src = "COUNTDOWN";
+                src = (strcmp(app_part, "cbb_scoreboard") == 0) ? "TIPOFF" : "COUNTDOWN";
             } else if (strcmp(scr_part, "tv_info") == 0) {
-                src = "TV & WEATHER";
+                src = (strcmp(app_part, "cbb_scoreboard") == 0) ? "TV & MATCHUP" : "TV & WEATHER";
             } else {
                 src = scr_part;
             }
@@ -222,6 +228,8 @@ static void format_app_short_label(const char *app_id, char *out, size_t cap)
             src = "CBB SCORES";
         } else if (strcmp(app_part, "clock") == 0) {
             src = "CLOCK";
+        } else if (strcmp(app_part, "bible_votd") == 0) {
+            src = "BIBLE VERSE";
         } else if (strcmp(app_part, "alarm") == 0) {
             src = "ALARM";
         } else {
@@ -479,6 +487,22 @@ static void init_default_config(cs_device_config_t *cfg)
     }
 }
 
+static const char *current_effective_slot_locked(void)
+{
+    if (s_shared.temp_override_slot[0] != '\0' &&
+        s_shared.temp_override_until_us > esp_timer_get_time()) {
+        return s_shared.temp_override_slot;
+    }
+    if (s_shared.manual_pinned_slot[0] != '\0') {
+        return s_shared.manual_pinned_slot;
+    }
+    if (s_shared.selected_app_idx >= 0 &&
+        s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
+        return s_shared.rotary_slots[s_shared.selected_app_idx].key;
+    }
+    return "";
+}
+
 static void portal_get_status(char *active_app, size_t active_cap,
                               char *pinned_app, size_t pinned_cap,
                               char *apps_json_arr, size_t apps_cap,
@@ -488,14 +512,18 @@ static void portal_get_status(char *active_app, size_t active_cap,
     if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         snprintf(active_app, active_cap, "%s",
                  s_shared.active_app_id[0] ? s_shared.active_app_id : "clock");
-        if (s_shared.manual_pinned_slot[0] != '\0') {
-            snprintf(pinned_app, pinned_cap, "%s", s_shared.manual_pinned_slot);
-        } else if (s_shared.selected_app_idx >= 0 &&
-                   s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
-            snprintf(pinned_app, pinned_cap, "%s",
-                     s_shared.rotary_slots[s_shared.selected_app_idx].key);
-        } else if (pinned_cap > 0) {
-            pinned_app[0] = '\0';
+        /* Report only the real permanent/rotary pin here — never the timed temp override —
+         * so saving settings in web_ui.html during a 3-min VOTD never pins it permanently. */
+        if (pinned_cap > 0) {
+            if (s_shared.manual_pinned_slot[0] != '\0') {
+                snprintf(pinned_app, pinned_cap, "%s", s_shared.manual_pinned_slot);
+            } else if (s_shared.selected_app_idx >= 0 &&
+                       s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
+                snprintf(pinned_app, pinned_cap, "%s",
+                         s_shared.rotary_slots[s_shared.selected_app_idx].key);
+            } else {
+                pinned_app[0] = '\0';
+            }
         }
 
         size_t pos = 0;
@@ -576,6 +604,40 @@ static void portal_on_apps_metadata_synced(void)
     }
 }
 
+static void on_ota_progress(const char *status, const char *detail)
+{
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        snprintf(s_shared.ota_status, sizeof(s_shared.ota_status), "%s",
+                 (status && status[0]) ? status : "updating");
+        snprintf(s_shared.ota_detail, sizeof(s_shared.ota_detail), "%s",
+                 detail ? detail : "");
+        xSemaphoreGive(s_state_mutex);
+    }
+}
+
+static void portal_get_temp_override(char *temp_app, size_t cap, uint32_t *remaining_sec_out)
+{
+    if (temp_app && cap > 0) {
+        temp_app[0] = '\0';
+    }
+    if (remaining_sec_out) {
+        *remaining_sec_out = 0;
+    }
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        int64_t now_us = esp_timer_get_time();
+        if (s_shared.temp_override_slot[0] != '\0' && s_shared.temp_override_until_us > now_us) {
+            if (temp_app && cap > 0) {
+                snprintf(temp_app, cap, "%s", s_shared.temp_override_slot);
+            }
+            if (remaining_sec_out) {
+                int64_t rem_us = s_shared.temp_override_until_us - now_us;
+                *remaining_sec_out = (uint32_t)((rem_us + 999999LL) / 1000000LL);
+            }
+        }
+        xSemaphoreGive(s_state_mutex);
+    }
+}
+
 static void portal_get_ota_status(char *state, size_t state_cap,
                                   char *detail, size_t detail_cap)
 {
@@ -643,6 +705,8 @@ static bool step_rotary_app_locked(int step)
 {
     int n = (int)s_shared.rotary_slot_count;
     s_shared.manual_pinned_slot[0] = '\0';
+    s_shared.temp_override_slot[0] = '\0';
+    s_shared.temp_override_until_us = 0;
     if (n <= 0 || step == 0) {
         return false;
     }
@@ -691,11 +755,47 @@ static void portal_on_step_app(int delta)
     }
 }
 
+static void activate_temp_override(const char *slot_key, uint32_t duration_sec)
+{
+    if (!slot_key || !slot_key[0]) {
+        return;
+    }
+    if (duration_sec < 15U) {
+        duration_sec = 15U;
+    } else if (duration_sec > 3600U) {
+        duration_sec = 3600U;
+    }
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        snprintf(s_shared.temp_override_slot, sizeof(s_shared.temp_override_slot),
+                 "%s", slot_key);
+        s_shared.temp_override_until_us =
+            esp_timer_get_time() + (int64_t)duration_sec * 1000000LL;
+        s_shared.rotary_override_active = false;
+        cache_apply_app_locked(s_shared.temp_override_slot);
+        xSemaphoreGive(s_state_mutex);
+    }
+    ESP_LOGI(TAG, "Temporary display override -> %s for %lus",
+             slot_key, (unsigned long)duration_sec);
+    if (s_api_task) {
+        xTaskNotifyGive(s_api_task);
+    }
+    if (s_render_task) {
+        xTaskNotifyGive(s_render_task);
+    }
+}
+
+static void portal_on_show_temp_app(const char *app_id, uint32_t duration_sec)
+{
+    activate_temp_override(app_id, duration_sec);
+}
+
 static void portal_on_set_pinned_app(const char *app_id)
 {
     if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         s_shared.selected_app_idx = -1;
         s_shared.manual_pinned_slot[0] = '\0';
+        s_shared.temp_override_slot[0] = '\0';
+        s_shared.temp_override_until_us = 0;
         s_shared.rotary_override_active = false;
         const char *target = NULL;
         if (app_id && app_id[0] != '\0') {
@@ -734,18 +834,10 @@ static void portal_on_settings_updated(const cs_local_settings_t *settings, cons
     dfplayer_set_eq(settings->df_eq);
 #endif
 
-    bool wake_api = false;
+    bool wake_api = true;
     if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        bool invalidate_cache =
-            (strcmp(s_shared.cfg.favorite_teams, settings->favorite_teams) != 0) ||
-            (strcmp(s_shared.cfg.timezone, settings->timezone) != 0) ||
-            (s_shared.cfg.quiet_enabled != settings->quiet_enabled) ||
-            (strcmp(s_shared.cfg.quiet_start, settings->quiet_start) != 0) ||
-            (strcmp(s_shared.cfg.quiet_end, settings->quiet_end) != 0);
-        if (invalidate_cache) {
-            cache_invalidate_all_locked();
-            wake_api = true;
-        }
+        /* Always invalidate cached frames/ETags on explicit settings save so rotation/app edits apply immediately */
+        cache_invalidate_all_locked();
         s_shared.rotary_idle_sec = settings->rotary_idle_sec;
         s_shared.cfg.brightness_override = settings->brightness_override;
         s_shared.cfg.quiet_enabled = settings->quiet_enabled;
@@ -766,6 +858,8 @@ static void portal_on_settings_updated(const cs_local_settings_t *settings, cons
         if (pinned_app != NULL) {
             s_shared.selected_app_idx = -1;
             s_shared.manual_pinned_slot[0] = '\0';
+            s_shared.temp_override_slot[0] = '\0';
+            s_shared.temp_override_until_us = 0;
             s_shared.rotary_override_active = false;
             const char *target = NULL;
             if (pinned_app[0] != '\0') {
@@ -899,6 +993,73 @@ static void portal_on_request_refresh(void)
     }
 }
 
+static bool portal_is_admin_unlocked(void)
+{
+    bool unlocked = false;
+    int64_t now_us = esp_timer_get_time();
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        unlocked = (s_shared.admin_unlocked_until_us > now_us);
+        xSemaphoreGive(s_state_mutex);
+    }
+    return unlocked;
+}
+
+static bool portal_is_admin_pin_active(void)
+{
+    bool active = false;
+    int64_t now_us = esp_timer_get_time();
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        active = (s_shared.admin_pin[0] != '\0' && s_shared.admin_pin_until_us > now_us);
+        xSemaphoreGive(s_state_mutex);
+    }
+    return active;
+}
+
+static void portal_on_request_admin_pin(void)
+{
+    int64_t now_us = esp_timer_get_time();
+    uint32_t code = esp_random() % 10000U;
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        snprintf(s_shared.admin_pin, sizeof(s_shared.admin_pin), "%04lu", (unsigned long)code);
+        s_shared.admin_pin_until_us = now_us + 60000000LL;
+        xSemaphoreGive(s_state_mutex);
+    }
+    ESP_LOGI(TAG, "Admin unlock PIN displayed on matrix (60s window)");
+    if (s_render_task) {
+        xTaskNotifyGive(s_render_task);
+    }
+}
+
+static bool portal_on_verify_admin_pin(const char *pin)
+{
+    if (!pin || strlen(pin) != 4U) {
+        return false;
+    }
+    bool ok = false;
+    int64_t now_us = esp_timer_get_time();
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (s_shared.admin_pin[0] != '\0' && s_shared.admin_pin_until_us > now_us) {
+            uint8_t diff = 0;
+            for (int i = 0; i < 4; i++) {
+                diff |= (uint8_t)(s_shared.admin_pin[i] ^ pin[i]);
+            }
+            if (diff == 0U) {
+                ok = true;
+                s_shared.admin_pin[0] = '\0';
+                s_shared.admin_pin_until_us = 0;
+                s_shared.admin_unlocked_until_us = now_us + 300000000LL; /* 5 minutes */
+                snprintf(s_shared.toast_text, sizeof(s_shared.toast_text), "UNLOCKED");
+                s_shared.toast_until_us = now_us + 1500000LL;
+            }
+        }
+        xSemaphoreGive(s_state_mutex);
+    }
+    if (ok && s_render_task) {
+        xTaskNotifyGive(s_render_task);
+    }
+    return ok;
+}
+
 static bool is_quiet_now(void)
 {
     bool q_mode = false;
@@ -947,13 +1108,17 @@ static void render_local_fallback(uint8_t *fb)
 {
     memset(fb, 0, CS_FRAME_RGB888_BYTES);
     if (wifi_manager_is_ap_mode() && !wifi_manager_is_connected()) {
+        char pw_line[24];
+        snprintf(pw_line, sizeof(pw_line), "PW:%s", wifi_manager_get_ap_password());
         gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
-                              32, 2, "SETUP WI-FI", GFX_FONT_3X5, GFX_ALIGN_CENTER, 90, 200, 255);
+                              32, 1, "SETUP WI-FI", GFX_FONT_3X5, GFX_ALIGN_CENTER, 90, 200, 255);
         gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
-                              32, 12, wifi_manager_get_ap_ssid(),
+                              32, 9, wifi_manager_get_ap_ssid(),
                               GFX_FONT_3X5, GFX_ALIGN_CENTER, 255, 210, 70);
         gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
-                              32, 22, "192.168.4.1", GFX_FONT_3X5, GFX_ALIGN_CENTER, 90, 235, 130);
+                              32, 17, pw_line, GFX_FONT_3X5, GFX_ALIGN_CENTER, 255, 255, 255);
+        gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                              32, 25, "192.168.4.1", GFX_FONT_3X5, GFX_ALIGN_CENTER, 90, 235, 130);
     } else if (sntp_time_is_synced()) {
         char tbuf[16];
         char dbuf[16];
@@ -979,7 +1144,278 @@ static void render_local_fallback(uint8_t *fb)
     }
 }
 
-static void composite_overlays(uint8_t *fb, const cs_overlay_t *overlays, size_t count)
+#define PAGED_TEXT_MAX_LINES 64
+#define PAGED_TEXT_LINE_CAP  24
+
+static uint64_t s_paged_cache_hash = 0;
+static char s_paged_lines[PAGED_TEXT_MAX_LINES][PAGED_TEXT_LINE_CAP];
+static size_t s_paged_line_count = 0;
+
+static uint64_t fnv1a_overlay_hash(const cs_overlay_t *ov)
+{
+    uint64_t h = 14695981039346656037ULL;
+    const uint8_t meta[10] = {
+        (uint8_t)ov->type,
+        (uint8_t)ov->font,
+        ov->max_width,
+        ov->max_lines,
+        ov->line_spacing,
+        ov->page_seconds,
+        (uint8_t)(ov->scroll_speed_ms & 0xFFU),
+        (uint8_t)((ov->scroll_speed_ms >> 8) & 0xFFU),
+        (uint8_t)(ov->clip_y0 & 0xFF),
+        (uint8_t)(ov->clip_y1 & 0xFF),
+    };
+    for (size_t i = 0; i < sizeof(meta); i++) {
+        h ^= meta[i];
+        h *= 1099511628211ULL;
+    }
+    for (const unsigned char *p = (const unsigned char *)ov->text; *p; p++) {
+        h ^= *p;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static void wrap_paged_lines_cached(const cs_overlay_t *ov)
+{
+    uint64_t h = fnv1a_overlay_hash(ov);
+    if (h == s_paged_cache_hash && s_paged_line_count > 0U) {
+        return;
+    }
+    s_paged_cache_hash = h;
+    s_paged_line_count = 0;
+
+    int max_w = (ov->max_width >= 16U && ov->max_width <= CS_FRAME_WIDTH)
+                    ? (int)ov->max_width
+                    : 62;
+    char cur[PAGED_TEXT_LINE_CAP];
+    cur[0] = '\0';
+    size_t cur_len = 0;
+
+    const char *p = ov->text;
+    while (*p && s_paged_line_count < PAGED_TEXT_MAX_LINES) {
+        while (*p && isspace((unsigned char)*p)) {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        const char *wstart = p;
+        while (*p && !isspace((unsigned char)*p)) {
+            p++;
+        }
+        size_t wlen = (size_t)(p - wstart);
+        char word[48];
+        if (wlen >= sizeof(word)) {
+            wlen = sizeof(word) - 1U;
+        }
+        for (size_t i = 0; i < wlen; i++) {
+            word[i] = (char)toupper((unsigned char)wstart[i]);
+        }
+        word[wlen] = '\0';
+
+        char cand[80];
+        if (cur_len > 0U) {
+            snprintf(cand, sizeof(cand), "%s %s", cur, word);
+        } else {
+            snprintf(cand, sizeof(cand), "%s", word);
+        }
+
+        size_t cand_len = strlen(cand);
+        if (gfx_measure_text(cand, ov->font) <= max_w && cand_len < PAGED_TEXT_LINE_CAP) {
+            memcpy(cur, cand, cand_len + 1U);
+            cur_len = cand_len;
+        } else {
+            if (cur_len > 0U && s_paged_line_count < PAGED_TEXT_MAX_LINES) {
+                memcpy(s_paged_lines[s_paged_line_count++], cur, cur_len + 1U);
+                cur[0] = '\0';
+                cur_len = 0;
+            }
+            if (gfx_measure_text(word, ov->font) <= max_w && wlen < PAGED_TEXT_LINE_CAP) {
+                memcpy(cur, word, wlen + 1U);
+                cur_len = wlen;
+            } else {
+                /* Hard-split overly long word to fit max_w */
+                for (size_t i = 0; i < wlen && s_paged_line_count < PAGED_TEXT_MAX_LINES; i++) {
+                    if (cur_len + 1U < PAGED_TEXT_LINE_CAP) {
+                        cur[cur_len] = word[i];
+                        cur[cur_len + 1U] = '\0';
+                        if (cur_len > 0U && gfx_measure_text(cur, ov->font) > max_w) {
+                            cur[cur_len] = '\0';
+                            snprintf(s_paged_lines[s_paged_line_count++], PAGED_TEXT_LINE_CAP, "%s", cur);
+                            cur[0] = word[i];
+                            cur[1] = '\0';
+                            cur_len = 1U;
+                        } else {
+                            cur_len++;
+                        }
+                    } else {
+                        snprintf(s_paged_lines[s_paged_line_count++], PAGED_TEXT_LINE_CAP, "%s", cur);
+                        cur[0] = word[i];
+                        cur[1] = '\0';
+                        cur_len = 1U;
+                    }
+                }
+            }
+        }
+    }
+    if (cur_len > 0U && s_paged_line_count < PAGED_TEXT_MAX_LINES) {
+        snprintf(s_paged_lines[s_paged_line_count++], PAGED_TEXT_LINE_CAP, "%s", cur);
+    }
+    if (s_paged_line_count == 0U) {
+        snprintf(s_paged_lines[0], PAGED_TEXT_LINE_CAP, "NO VERSE");
+        s_paged_line_count = 1U;
+    }
+}
+
+static void render_paged_text_overlay(uint8_t *fb, const cs_overlay_t *ov, int64_t elapsed_ms)
+{
+    wrap_paged_lines_cached(ov);
+    size_t max_lines = (ov->max_lines >= 1U && ov->max_lines <= 4U) ? (size_t)ov->max_lines : 3U;
+    int line_step = (ov->line_spacing >= 5U && ov->line_spacing <= 12U)
+                        ? (int)ov->line_spacing
+                        : ((ov->font == GFX_FONT_4X6) ? 8 : 6);
+    uint64_t page_ms = (uint64_t)((ov->page_seconds >= 3U && ov->page_seconds <= 30U)
+                                      ? ov->page_seconds
+                                      : 6U) * 1000ULL;
+    size_t total_pages = (s_paged_line_count + max_lines - 1U) / max_lines;
+    if (total_pages == 0U) {
+        total_pages = 1U;
+    }
+    size_t page_idx = (total_pages > 1U && elapsed_ms >= 0)
+                          ? (size_t)(((uint64_t)elapsed_ms / page_ms) % (uint64_t)total_pages)
+                          : 0U;
+    size_t start_line = page_idx * max_lines;
+
+    for (size_t r = 0; r < max_lines && (start_line + r) < s_paged_line_count; r++) {
+        gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                              ov->x, ov->y + (int)r * line_step,
+                              s_paged_lines[start_line + r],
+                              ov->font, ov->align, ov->r, ov->g, ov->b);
+    }
+
+    if (total_pages > 1U && ov->has_dots) {
+        if (ov->dots_y >= 31) {
+            int seg_w = (CS_FRAME_WIDTH - 2) / (int)total_pages;
+            if (seg_w < 2) {
+                seg_w = 2;
+            }
+            for (size_t i = 0; i < total_pages; i++) {
+                int x0 = 1 + (int)i * seg_w;
+                int x1 = x0 + seg_w - 2;
+                if (x1 > CS_FRAME_WIDTH - 2) {
+                    x1 = CS_FRAME_WIDTH - 2;
+                }
+                int w = (x1 >= x0) ? (x1 - x0 + 1) : 1;
+                bool active = (i == page_idx);
+                gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT, x0, 31, w, 1,
+                              active ? ov->dot_ar : ov->dot_ir,
+                              active ? ov->dot_ag : ov->dot_ig,
+                              active ? ov->dot_ab : ov->dot_ib);
+            }
+        } else if (total_pages <= 7U) {
+            int spacing = 3;
+            int dots_w = (int)total_pages * 2 + ((int)total_pages - 1) * (spacing - 2);
+            int start_x = ov->dots_x - dots_w;
+            for (size_t i = 0; i < total_pages; i++) {
+                bool active = (i == page_idx);
+                gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                              start_x + (int)i * spacing, ov->dots_y, 2, 2,
+                              active ? ov->dot_ar : ov->dot_ir,
+                              active ? ov->dot_ag : ov->dot_ig,
+                              active ? ov->dot_ab : ov->dot_ib);
+            }
+        } else {
+            char pg_txt[24];
+            snprintf(pg_txt, sizeof(pg_txt), "%u/%u",
+                     (unsigned)((page_idx + 1U) % 100U), (unsigned)(total_pages % 100U));
+            int py = (ov->dots_y >= 2) ? (ov->dots_y - 2) : 0;
+            gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                                  ov->dots_x, py, pg_txt, GFX_FONT_3X5, GFX_ALIGN_RIGHT,
+                                  ov->dot_ar, ov->dot_ag, ov->dot_ab);
+        }
+    }
+}
+
+static void render_scroll_progress_bar(uint8_t *fb, const cs_overlay_t *ov, int offset, int span)
+{
+    if (!ov->has_dots) {
+        return;
+    }
+    int bar_w = (ov->dots_y >= 31) ? (CS_FRAME_WIDTH - 2) : 18;
+    int bar_x = (ov->dots_y >= 31) ? 1 : (ov->dots_x - bar_w);
+    if (bar_x < 1) {
+        bar_x = 1;
+    }
+    int denom = (span > 1) ? (span - 1) : 1;
+    int fill_w = (offset * bar_w + denom / 2) / denom;
+    if (fill_w < 1) {
+        fill_w = 1;
+    }
+    if (fill_w > bar_w) {
+        fill_w = bar_w;
+    }
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                  bar_x, ov->dots_y, bar_w, 1,
+                  ov->dot_ir, ov->dot_ig, ov->dot_ib);
+    gfx_fill_rect(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                  bar_x, ov->dots_y, fill_w, 1,
+                  ov->dot_ar, ov->dot_ag, ov->dot_ab);
+}
+
+static void render_scroll_text_overlay(uint8_t *fb, const cs_overlay_t *ov, uint32_t scroll_px)
+{
+    if (!ov->text[0]) {
+        return;
+    }
+    int total_w = gfx_measure_text(ov->text, ov->font);
+    int span = CS_FRAME_WIDTH + total_w + 18;
+    if (span < 1) {
+        span = 1;
+    }
+    int offset = (int)(scroll_px % (uint32_t)span);
+    gfx_draw_text_aligned(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                          CS_FRAME_WIDTH - offset, ov->y, ov->text,
+                          ov->font, GFX_ALIGN_LEFT, ov->r, ov->g, ov->b);
+    render_scroll_progress_bar(fb, ov, offset, span);
+}
+
+static void render_scroll_up_overlay(uint8_t *fb, const cs_overlay_t *ov, uint32_t scroll_px)
+{
+    wrap_paged_lines_cached(ov);
+    int line_step = (ov->line_spacing >= 6U && ov->line_spacing <= 12U)
+                        ? (int)ov->line_spacing
+                        : 8;
+    int char_h = (ov->font == GFX_FONT_5X7) ? 7 : ((ov->font == GFX_FONT_4X6) ? 6 : 5);
+    int clip_y0 = (ov->clip_y0 >= 0 && ov->clip_y0 < CS_FRAME_HEIGHT) ? (int)ov->clip_y0 : 8;
+    int clip_y1 = (ov->clip_y1 >= clip_y0 && ov->clip_y1 < CS_FRAME_HEIGHT) ? (int)ov->clip_y1 : 25;
+    int view_h = clip_y1 - clip_y0 + 1;
+    int total_h = (s_paged_line_count > 0U)
+                      ? ((int)(s_paged_line_count - 1U) * line_step + char_h)
+                      : char_h;
+    int span = view_h + total_h + 6;
+    if (span < 1) {
+        span = 1;
+    }
+    int offset = (int)(scroll_px % (uint32_t)span);
+    int start_y = (clip_y1 + 1) - offset;
+
+    for (size_t i = 0; i < s_paged_line_count; i++) {
+        int ly = start_y + (int)i * line_step;
+        if (ly > clip_y1 || (ly + char_h - 1) < clip_y0) {
+            continue;
+        }
+        gfx_draw_text_clipped_y(fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                                ov->x, ly, s_paged_lines[i],
+                                ov->font, ov->align, ov->r, ov->g, ov->b,
+                                clip_y0, clip_y1);
+    }
+    render_scroll_progress_bar(fb, ov, offset, span);
+}
+
+static void composite_overlays(uint8_t *fb, const cs_overlay_t *overlays, size_t count,
+                               int64_t anim_elapsed_ms, uint32_t anim_scroll_px)
 {
     char text[64];
     bool has_clock_time = false;
@@ -990,6 +1426,18 @@ static void composite_overlays(uint8_t *fb, const cs_overlay_t *overlays, size_t
             has_clock_time = true;
         } else if (strcmp(ov->id, "clock_date") == 0) {
             has_clock_date = true;
+        }
+        if (ov->type == CS_OVERLAY_PAGED_TEXT) {
+            render_paged_text_overlay(fb, ov, anim_elapsed_ms);
+            continue;
+        }
+        if (ov->type == CS_OVERLAY_SCROLL_TEXT) {
+            render_scroll_text_overlay(fb, ov, anim_scroll_px);
+            continue;
+        }
+        if (ov->type == CS_OVERLAY_SCROLL_UP) {
+            render_scroll_up_overlay(fb, ov, anim_scroll_px);
+            continue;
         }
         text[0] = '\0';
         switch (ov->type) {
@@ -1003,7 +1451,7 @@ static void composite_overlays(uint8_t *fb, const cs_overlay_t *overlays, size_t
             if (ov->target_epoch <= 0) {
                 continue;
             }
-            sntp_time_format_countdown(ov->target_epoch, text, sizeof(text));
+            sntp_time_format_countdown(ov->target_epoch, ov->format, text, sizeof(text));
             break;
         case CS_OVERLAY_TEXT:
             snprintf(text, sizeof(text), "%s", ov->text);
@@ -1454,6 +1902,67 @@ static void play_local_alarm(const cs_alarm_item_t *item,
     s_suppress_server_alarm_until_us = esp_timer_get_time() + (int64_t)(max_dur_s + 60U) * 1000000LL;
     peripherals_set_fast_click(true);
 
+    /* Auto-disable one-time alarms immediately on trigger (like a phone) and wake api_task to sync right away */
+    if (!item->repeat && item->id[0]) {
+        settings_store_consume_onetime_alarm(item->id);
+        if (s_api_task) {
+            xTaskNotifyGive(s_api_task);
+        }
+    }
+
+    uint8_t post_mins = (item->post_minutes >= 1U && item->post_minutes <= 60U)
+                            ? item->post_minutes
+                            : 5U;
+
+    /* Gentle Chime + Bible Verse mode: play a single chime and jump straight to Bible Verse */
+    if (item->post_action == CS_ALARM_POST_BIBLE_VOTD_GENTLE) {
+        ESP_LOGI(TAG, "Gentle Bible Verse alarm triggered: %02u:%02u label=\"%s\" sound=%u:%u show=%um",
+                 (unsigned)item->hour, (unsigned)item->minute,
+                 item->label, (unsigned)item->folder, (unsigned)item->track,
+                 (unsigned)post_mins);
+#if CONFIG_CS_ENABLE_DFPLAYER
+        {
+            cs_local_settings_t local;
+            settings_store_get(&local);
+            uint8_t saved_vol = local.df_volume;
+            uint8_t vol = (sched->volume > 0U)
+                              ? ((sched->volume > 30U) ? 30U : sched->volume)
+                              : local.df_volume;
+            if (vol > 0U && item->folder > 0U && item->track > 0U) {
+                dfplayer_flush_rx();
+                if (vol != saved_vol) {
+                    dfplayer_set_volume(vol);
+                    vTaskDelay(pdMS_TO_TICKS(30));
+                }
+                dfplayer_play_folder_track(item->folder, item->track);
+                /* Wait briefly for chime to start/play (or dismiss) before restoring volume */
+                int64_t chime_start = esp_timer_get_time();
+                while (!s_dismiss_alert && (esp_timer_get_time() - chime_start) < 2500000LL) {
+                    if (dfplayer_poll_track_finished() &&
+                        (esp_timer_get_time() - chime_start) >= 500000LL) {
+                        break;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(80));
+                }
+                if (vol != saved_vol) {
+                    dfplayer_set_volume(saved_vol);
+                }
+            }
+        }
+#endif
+        s_dismiss_alert = false;
+        s_alarm_ringing = false;
+        s_alert_playing = false;
+        if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            update_fast_click_locked();
+            xSemaphoreGive(s_state_mutex);
+        } else {
+            peripherals_set_fast_click(false);
+        }
+        activate_temp_override("bible_votd", (uint32_t)post_mins * 60U);
+        return;
+    }
+
     ESP_LOGI(TAG, "Local zero-delay alarm triggered: %02u:%02u label=\"%s\" sound=%u:%u repeat_ms=%lu dur=%us vol=%u",
              (unsigned)item->hour, (unsigned)item->minute,
              item->label, (unsigned)item->folder, (unsigned)item->track,
@@ -1546,13 +2055,6 @@ static void play_local_alarm(const cs_alarm_item_t *item,
              (unsigned long)frame_idx, (unsigned long)replay_count,
              s_dismiss_alert ? "yes" : "no");
 
-    if (!item->repeat && item->id[0]) {
-        settings_store_consume_onetime_alarm(item->id);
-        if (s_api_task) {
-            xTaskNotifyGive(s_api_task);
-        }
-    }
-
     s_dismiss_alert = false;
     s_alarm_ringing = false;
     s_alert_playing = false;
@@ -1561,6 +2063,10 @@ static void play_local_alarm(const cs_alarm_item_t *item,
         xSemaphoreGive(s_state_mutex);
     } else {
         peripherals_set_fast_click(false);
+    }
+
+    if (item->post_action == CS_ALARM_POST_BIBLE_VOTD) {
+        activate_temp_override("bible_votd", (uint32_t)post_mins * 60U);
     }
 }
 
@@ -1682,14 +2188,22 @@ static void render_task(void *arg)
     (void)arg;
     uint8_t *work_fb = psram_prefer_malloc(CS_FRAME_RGB888_BYTES);
     uint8_t *last_fb = psram_prefer_malloc(CS_FRAME_RGB888_BYTES);
-    if (!work_fb || !last_fb) {
+    cs_overlay_t *overlays_copy = psram_prefer_calloc(CS_MAX_OVERLAYS, sizeof(cs_overlay_t));
+    if (!work_fb || !last_fb || !overlays_copy) {
         ESP_LOGE(TAG, "Failed to allocate render framebuffers");
+        free(work_fb);
+        free(last_fb);
+        free(overlays_copy);
         vTaskDelete(NULL);
         return;
     }
 
     bool last_valid = false;
-    cs_overlay_t overlays_copy[CS_MAX_OVERLAYS];
+    uint64_t anim_sig = 0;
+    int64_t anim_start_us = esp_timer_get_time();
+    uint32_t anim_scroll_px = 0;
+    int64_t anim_next_step_us = 0;
+    int64_t last_alarm_chk_us = 0;
 
     while (true) {
         cs_alert_t alert = {0};
@@ -1704,6 +2218,7 @@ static void render_task(void *arg)
         int menu_tz_idx = 1;
         char toast[24] = "";
         int64_t toast_until = 0;
+        char admin_pin_copy[8] = {0};
 
         if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             if (s_shared.pending_alert.valid) {
@@ -1719,7 +2234,14 @@ static void render_task(void *arg)
             if (switching_pending) {
                 snprintf(switching_label, sizeof(switching_label), "%s", s_shared.switching_label);
             }
-            if (s_shared.toast_text[0] && s_shared.toast_until_us > esp_timer_get_time()) {
+            int64_t snap_now_us = esp_timer_get_time();
+            if (s_shared.admin_pin[0] && s_shared.admin_pin_until_us > snap_now_us) {
+                snprintf(admin_pin_copy, sizeof(admin_pin_copy), "%s", s_shared.admin_pin);
+            } else if (s_shared.admin_pin[0]) {
+                s_shared.admin_pin[0] = '\0';
+                s_shared.admin_pin_until_us = 0;
+            }
+            if (s_shared.toast_text[0] && s_shared.toast_until_us > snap_now_us) {
                 snprintf(toast, sizeof(toast), "%s", s_shared.toast_text);
                 toast_until = s_shared.toast_until_us;
             } else {
@@ -1740,8 +2262,10 @@ static void render_task(void *arg)
             xSemaphoreGive(s_state_mutex);
         }
 
-        /* Check local SNTP alarms every 100ms for exact :00 zero-delay triggering */
-        {
+        /* Check local SNTP alarms every 250ms (triggers right at :00 without adding jitter to 30ms scrolling) */
+        int64_t loop_now_us = esp_timer_get_time();
+        if (loop_now_us - last_alarm_chk_us >= 250000LL) {
+            last_alarm_chk_us = loop_now_us;
             cs_alarm_item_t due_item;
             cs_alarm_schedule_t due_sched;
             if (check_local_alarm_due(&due_item, &due_sched)) {
@@ -1763,14 +2287,65 @@ static void render_task(void *arg)
             }
         }
 
-        if (menu_page != MENU_NONE) {
+        bool scroll_active = false;
+        uint32_t scroll_step_ms = 0U;
+        if (admin_pin_copy[0]) {
+            memset(work_fb, 0, CS_FRAME_RGB888_BYTES);
+            gfx_draw_text_aligned(work_fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                                  32, 2, "ADMIN PIN", GFX_FONT_3X5, GFX_ALIGN_CENTER, 90, 200, 255);
+            gfx_draw_text_aligned(work_fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                                  32, 11, admin_pin_copy, GFX_FONT_5X7, GFX_ALIGN_CENTER, 255, 220, 60);
+            gfx_draw_text_aligned(work_fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                                  32, 23, "OR CLICK KNOB", GFX_FONT_3X5, GFX_ALIGN_CENTER, 140, 220, 160);
+        } else if (menu_page != MENU_NONE) {
             render_menu_overlay(work_fb, menu_page, menu_edit, menu_vol, menu_bright, menu_tz_idx);
         } else if (switching_pending) {
             render_switching_overlay(work_fb, switching_label);
         } else if (!has_frame || (wifi_manager_is_ap_mode() && !wifi_manager_is_connected())) {
             render_local_fallback(work_fb);
         } else {
-            composite_overlays(work_fb, overlays_copy, overlay_count);
+            uint64_t cur_sig = 0;
+            for (size_t i = 0; i < overlay_count; i++) {
+                const cs_overlay_t *ov = &overlays_copy[i];
+                if (ov->type == CS_OVERLAY_PAGED_TEXT ||
+                    ov->type == CS_OVERLAY_SCROLL_TEXT ||
+                    ov->type == CS_OVERLAY_SCROLL_UP) {
+                    cur_sig ^= fnv1a_overlay_hash(ov);
+                }
+                if (ov->type == CS_OVERLAY_SCROLL_TEXT || ov->type == CS_OVERLAY_SCROLL_UP) {
+                    scroll_active = true;
+                    uint32_t sp = (ov->scroll_speed_ms >= 20U && ov->scroll_speed_ms <= 400U)
+                                      ? (uint32_t)ov->scroll_speed_ms
+                                      : ((ov->type == CS_OVERLAY_SCROLL_UP) ? 100U : 40U);
+                    if (scroll_step_ms == 0U || sp < scroll_step_ms) {
+                        scroll_step_ms = sp;
+                    }
+                }
+            }
+            int64_t now_us = esp_timer_get_time();
+            if (cur_sig != anim_sig) {
+                anim_sig = cur_sig;
+                anim_start_us = now_us;
+                anim_scroll_px = 0U;
+                anim_next_step_us = scroll_active ? (now_us + (int64_t)scroll_step_ms * 1000LL) : 0;
+            } else if (scroll_active && scroll_step_ms > 0U) {
+                int64_t step_us = (int64_t)scroll_step_ms * 1000LL;
+                if (anim_next_step_us <= 0) {
+                    anim_next_step_us = now_us + step_us;
+                } else if (now_us >= anim_next_step_us) {
+                    /* Advance by strictly 1px per deadline for jitter-free scrolling (no +2px aliasing jumps) */
+                    anim_scroll_px++;
+                    anim_next_step_us += step_us;
+                    if (now_us - anim_next_step_us > 250000LL) {
+                        anim_next_step_us = now_us + step_us;
+                    }
+                }
+            }
+            int64_t anim_elapsed_ms = (now_us - anim_start_us) / 1000LL;
+            if (anim_elapsed_ms < 0) {
+                anim_elapsed_ms = 0;
+            }
+            composite_overlays(work_fb, overlays_copy, overlay_count, anim_elapsed_ms, anim_scroll_px);
         }
 
         if (toast[0] && toast_until > esp_timer_get_time()) {
@@ -1785,7 +2360,17 @@ static void render_task(void *arg)
             hub75_present_rgb888(work_fb);
         }
 
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+        uint32_t wait_ms = 100U;
+        if (scroll_active && anim_next_step_us > 0) {
+            int64_t rem_us = anim_next_step_us - esp_timer_get_time();
+            if (rem_us <= 0LL) {
+                wait_ms = 1U;
+            } else {
+                uint32_t r_ms = (uint32_t)((rem_us + 999LL) / 1000LL);
+                wait_ms = (r_ms < 250U) ? r_ms : 250U;
+            }
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
     }
 }
 
@@ -2029,7 +2614,24 @@ static void input_task(void *arg)
             }
 
             if (!in_menu) {
-                if (s_alert_playing &&
+                bool unlocked_via_knob = false;
+                if (ev.type == CS_INPUT_BTN_SHORT &&
+                    xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    int64_t now_btn_us = esp_timer_get_time();
+                    if (s_shared.admin_pin[0] != '\0' && s_shared.admin_pin_until_us > now_btn_us) {
+                        s_shared.admin_pin[0] = '\0';
+                        s_shared.admin_pin_until_us = 0;
+                        s_shared.admin_unlocked_until_us = now_btn_us + 300000000LL;
+                        snprintf(s_shared.toast_text, sizeof(s_shared.toast_text), "UNLOCKED");
+                        s_shared.toast_until_us = now_btn_us + 1500000LL;
+                        unlocked_via_knob = true;
+                        wake_render = true;
+                    }
+                    xSemaphoreGive(s_state_mutex);
+                }
+                if (unlocked_via_knob) {
+                    ESP_LOGI(TAG, "Admin unlocked for 5 min via physical knob click");
+                } else if (s_alert_playing &&
                     (ev.type == CS_INPUT_BTN_SHORT ||
                      ev.type == CS_INPUT_BTN_DOUBLE ||
                      ev.type == CS_INPUT_BTN_TRIPLE)) {
@@ -2100,6 +2702,7 @@ static void input_task(void *arg)
         int exit_bright = -1;
         int exit_tz_idx = 1;
         bool return_auto = false;
+        bool temp_expired = false;
         uint16_t rotary_idle_sec = 30U;
 
         if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -2118,6 +2721,13 @@ static void input_task(void *arg)
                 cache_apply_app_locked(NULL);
                 update_fast_click_locked();
                 exit_menu = true;
+            } else if (s_shared.temp_override_until_us > 0 &&
+                       now_us >= s_shared.temp_override_until_us) {
+                s_shared.temp_override_slot[0] = '\0';
+                s_shared.temp_override_until_us = 0;
+                const char *restore_slot = current_effective_slot_locked();
+                cache_apply_app_locked(restore_slot[0] ? restore_slot : NULL);
+                temp_expired = true;
             } else if (rotary_idle_sec > 0 &&
                        s_shared.rotary_override_active && s_shared.selected_app_idx >= 0 &&
                        (now_us - s_shared.last_rotary_us) >= (int64_t)rotary_idle_sec * 1000000LL) {
@@ -2133,6 +2743,14 @@ static void input_task(void *arg)
         if (exit_menu) {
             save_menu_changes(exit_page, exit_vol, exit_bright, exit_tz_idx);
             ESP_LOGI(TAG, "Menu idle timeout (%us): returning to Auto schedule", (unsigned)MENU_IDLE_TIMEOUT_SEC);
+            if (s_render_task) {
+                xTaskNotifyGive(s_render_task);
+            }
+            if (s_api_task) {
+                xTaskNotifyGive(s_api_task);
+            }
+        } else if (temp_expired) {
+            ESP_LOGI(TAG, "Temporary display override expired: returning to Auto/pinned schedule");
             if (s_render_task) {
                 xTaskNotifyGive(s_render_task);
             }
@@ -2265,6 +2883,15 @@ static void api_task(void *arg)
 
         cs_local_settings_t local;
         settings_store_get(&local);
+        static int64_t last_enroll_try_us = -60000000LL;
+        if (local.device_token[0] == '\0' && (now_us - last_enroll_try_us) >= 60000000LL) {
+            last_enroll_try_us = now_us;
+            char new_tok[72] = {0};
+            if (api_client_enroll_device(new_tok, sizeof(new_tok)) == ESP_OK && new_tok[0]) {
+                settings_store_set_device_token(new_tok);
+                settings_store_get(&local);
+            }
+        }
         if (local.cloud_sync_pending) {
             if (api_client_post_config(&local, NULL, NULL) == ESP_OK) {
                 local.cloud_sync_pending = false;
@@ -2275,16 +2902,21 @@ static void api_task(void *arg)
             }
         }
 
-        /* Sync any locally auto-deleted one-time alarms back to the cloud server */
+        /* Sync any locally auto-disabled one-time alarms back to the cloud server */
         {
             cs_alarm_schedule_t pending_alarms;
             settings_store_get_alarms(&pending_alarms);
             if (pending_alarms.pending_delete_count > 0U) {
+                bool any_synced = false;
                 for (uint8_t i = 0; i < pending_alarms.pending_delete_count && i < CS_MAX_LOCAL_ALARMS; i++) {
                     if (pending_alarms.pending_delete_ids[i][0] &&
-                        api_client_delete_alarm(pending_alarms.pending_delete_ids[i]) == ESP_OK) {
+                        api_client_disable_alarm(pending_alarms.pending_delete_ids[i]) == ESP_OK) {
                         settings_store_clear_pending_alarm_delete(pending_alarms.pending_delete_ids[i]);
+                        any_synced = true;
                     }
+                }
+                if (any_synced) {
+                    s_force_cfg_sync = true;
                 }
             }
         }
@@ -2302,7 +2934,7 @@ static void api_task(void *arg)
             bool update_avail = false;
             char detail[64] = "";
             esp_err_t ota_err = api_client_check_and_run_ota(
-                CONFIG_CS_FIRMWARE_VERSION, &update_avail, detail, sizeof(detail));
+                CONFIG_CS_FIRMWARE_VERSION, &update_avail, detail, sizeof(detail), on_ota_progress);
             if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
                 snprintf(s_shared.ota_status, sizeof(s_shared.ota_status), "%s",
                          (ota_err == ESP_OK) ? (update_avail ? "updating" : "up_to_date") : "error");
@@ -2363,7 +2995,10 @@ static void api_task(void *arg)
                         (strcmp(s_shared.cfg.timezone, new_cfg.timezone) != 0) ||
                         (s_shared.cfg.quiet_enabled != new_cfg.quiet_enabled) ||
                         (strcmp(s_shared.cfg.quiet_start, new_cfg.quiet_start) != 0) ||
-                        (strcmp(s_shared.cfg.quiet_end, new_cfg.quiet_end) != 0);
+                        (strcmp(s_shared.cfg.quiet_end, new_cfg.quiet_end) != 0) ||
+                        (strcmp(s_shared.cfg.selection_mode, new_cfg.selection_mode) != 0) ||
+                        (s_shared.cfg.rotation_seconds != new_cfg.rotation_seconds) ||
+                        (s_shared.cfg.rotate_include_clock != new_cfg.rotate_include_clock);
                     if (cfg_changed) {
                         cache_invalidate_all_locked();
                     }
@@ -2436,20 +3071,25 @@ static void api_task(void *arg)
             }
         }
 
-        int req_app_idx = -1;
         char req_slot_key[64] = {0};
         char app_override[32] = {0};
         char screen_override[24] = {0};
         char cached_etag[48] = {0};
         char etag_lookup_key[64] = {0};
         if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            req_app_idx = s_shared.selected_app_idx;
-            if (s_shared.manual_pinned_slot[0] != '\0') {
-                snprintf(req_slot_key, sizeof(req_slot_key), "%s", s_shared.manual_pinned_slot);
-            } else if (req_app_idx >= 0 &&
-                       req_app_idx < (int)s_shared.rotary_slot_count) {
-                snprintf(req_slot_key, sizeof(req_slot_key), "%s",
-                         s_shared.rotary_slots[req_app_idx].key);
+            if (s_shared.temp_override_until_us > 0 &&
+                esp_timer_get_time() >= s_shared.temp_override_until_us) {
+                s_shared.temp_override_slot[0] = '\0';
+                s_shared.temp_override_until_us = 0;
+                const char *restore_slot = current_effective_slot_locked();
+                cache_apply_app_locked(restore_slot[0] ? restore_slot : NULL);
+                if (s_render_task) {
+                    xTaskNotifyGive(s_render_task);
+                }
+            }
+            const char *eff = current_effective_slot_locked();
+            if (eff[0] != '\0') {
+                snprintf(req_slot_key, sizeof(req_slot_key), "%s", eff);
             }
             split_slot_key(req_slot_key, app_override, sizeof(app_override),
                            screen_override, sizeof(screen_override));
@@ -2474,6 +3114,7 @@ static void api_task(void *arg)
         static bool s_logged_health = false;
         cs_frame_response_t *resp = psram_prefer_calloc(1, sizeof(cs_frame_response_t));
         uint32_t wait_sec = base_poll;
+        int64_t wait_anchor_us = esp_timer_get_time();
         bool stale_selection = false;
         bool fetched_ok = false;
         bool need_render_wake = false;
@@ -2488,6 +3129,7 @@ static void api_task(void *arg)
                                              cached_etag[0] ? cached_etag : NULL,
                                              resp) == ESP_OK) {
             fetched_ok = true;
+            wait_anchor_us = esp_timer_get_time();
             fail_count = 0;
             hub75_set_status_indicator(HUB75_STATUS_NONE);
             wait_sec = (resp->refresh_seconds >= 1U)
@@ -2509,15 +3151,8 @@ static void api_task(void *arg)
                     if (store_key[0]) {
                         cache_touch_slot_locked(store_key, resp->refresh_seconds);
                     }
-                    const char *cur_slot_key = "";
-                    if (s_shared.manual_pinned_slot[0] != '\0') {
-                        cur_slot_key = s_shared.manual_pinned_slot;
-                    } else if (s_shared.selected_app_idx >= 0 &&
-                               s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
-                        cur_slot_key = s_shared.rotary_slots[s_shared.selected_app_idx].key;
-                    }
-                    if (s_shared.selected_app_idx != req_app_idx ||
-                        strcmp(cur_slot_key, req_slot_key) != 0) {
+                    const char *cur_slot_key = current_effective_slot_locked();
+                    if (strcmp(cur_slot_key, req_slot_key) != 0) {
                         stale_selection = true;
                     } else if (s_shared.switching_pending ||
                                (store_key[0] && strcmp(s_shared.active_app_id, store_key) != 0)) {
@@ -2537,15 +3172,8 @@ static void api_task(void *arg)
                                  "%s", resp->app_id);
                     }
 
-                    const char *cur_slot_key = "";
-                    if (s_shared.manual_pinned_slot[0] != '\0') {
-                        cur_slot_key = s_shared.manual_pinned_slot;
-                    } else if (s_shared.selected_app_idx >= 0 &&
-                               s_shared.selected_app_idx < (int)s_shared.rotary_slot_count) {
-                        cur_slot_key = s_shared.rotary_slots[s_shared.selected_app_idx].key;
-                    }
-                    if (s_shared.selected_app_idx != req_app_idx ||
-                        strcmp(cur_slot_key, req_slot_key) != 0) {
+                    const char *cur_slot_key = current_effective_slot_locked();
+                    if (strcmp(cur_slot_key, req_slot_key) != 0) {
                         stale_selection = true;
                         api_client_free_alert(&resp->alert);
                     } else {
@@ -2632,11 +3260,12 @@ static void api_task(void *arg)
             continue;
         }
 
-        /* Background-warm / refresh one uncached or TTL-expired slot per idle poll so every screen stays fresh */
-        if (fetched_ok && req_slot_key[0] == '\0') {
+        /* Background-warm / refresh one uncached or TTL-expired slot per idle poll so every screen stays fresh.
+         * Skip when wait_sec is short (<= 6s) so tight rotation/alarm wakeups aren't delayed by an extra HTTPS call. */
+        if (fetched_ok && req_slot_key[0] == '\0' && wait_sec > 6U) {
             char warm_slot[64] = {0};
             if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                if (s_shared.selected_app_idx < 0 && s_shared.manual_pinned_slot[0] == '\0') {
+                if (current_effective_slot_locked()[0] == '\0') {
                     cache_pick_bg_refresh_app_locked(esp_timer_get_time(), warm_slot, sizeof(warm_slot));
                 }
                 xSemaphoreGive(s_state_mutex);
@@ -2680,8 +3309,7 @@ static void api_task(void *arg)
                 }
                 bool knob_moved = false;
                 if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-                    knob_moved = (s_shared.selected_app_idx >= 0 ||
-                                  s_shared.manual_pinned_slot[0] != '\0');
+                    knob_moved = (current_effective_slot_locked()[0] != '\0');
                     xSemaphoreGive(s_state_mutex);
                 }
                 if (knob_moved) {
@@ -2692,7 +3320,27 @@ static void api_task(void *arg)
 
         maybe_play_hourly_chime(&last_chime_hour);
 
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_sec * 1000U));
+        uint32_t sleep_ms = wait_sec * 1000U;
+        if (fetched_ok) {
+            int64_t elapsed_ms = (esp_timer_get_time() - wait_anchor_us) / 1000LL;
+            if (elapsed_ms > 0) {
+                sleep_ms = ((int64_t)sleep_ms > elapsed_ms + 250LL)
+                               ? (uint32_t)((int64_t)sleep_ms - elapsed_ms)
+                               : 250U;
+            }
+        }
+        /* Never sleep past a temporary override deadline (e.g. 3-min VOTD with 5-min refresh_seconds) */
+        if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            if (s_shared.temp_override_until_us > 0) {
+                int64_t rem_ms = (s_shared.temp_override_until_us - esp_timer_get_time()) / 1000LL;
+                uint32_t wake_ms = (rem_ms > 0) ? (uint32_t)(rem_ms + 250LL) : 250U;
+                if (wake_ms < sleep_ms) {
+                    sleep_ms = wake_ms;
+                }
+            }
+            xSemaphoreGive(s_state_mutex);
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(sleep_ms));
     }
 }
 
@@ -2759,17 +3407,23 @@ void app_main(void)
     const web_portal_hooks_t portal_hooks = {
         .get_display_status = portal_get_status,
         .get_ota_status = portal_get_ota_status,
+        .get_temp_override = portal_get_temp_override,
         .get_active_events = portal_get_active_events,
         .is_alarm_ringing = portal_is_alarm_ringing,
         .get_api_fail_count = portal_get_api_fail_count,
         .on_settings_updated = portal_on_settings_updated,
         .on_apply_brightness = portal_on_apply_brightness,
         .on_set_pinned_app = portal_on_set_pinned_app,
+        .on_show_temp_app = portal_on_show_temp_app,
         .on_step_app = portal_on_step_app,
         .on_apps_metadata_synced = portal_on_apps_metadata_synced,
         .on_request_refresh = portal_on_request_refresh,
         .on_request_ota = portal_on_request_ota,
         .on_audio_action = portal_on_audio_action,
+        .is_admin_unlocked = portal_is_admin_unlocked,
+        .is_admin_pin_active = portal_is_admin_pin_active,
+        .on_request_admin_pin = portal_on_request_admin_pin,
+        .on_verify_admin_pin = portal_on_verify_admin_pin,
     };
     if (web_portal_start(&portal_hooks) != ESP_OK) {
         ESP_LOGW(TAG, "Local web portal failed to start");

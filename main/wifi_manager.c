@@ -38,6 +38,7 @@ static uint32_t s_fail_streak = 0;
 static char s_ip_str[16] = "0.0.0.0";
 static char s_device_id[32] = {0};
 static char s_ap_ssid[33] = {0};
+static char s_ap_pass[16] = {0};
 static char s_sta_ssid[33] = {0};
 
 static volatile bool s_ap_active = false;
@@ -179,15 +180,17 @@ static esp_err_t enable_softap(bool pinned_setup_mode)
     wifi_config_t ap_cfg = {0};
     copy_wifi_field(ap_cfg.ap.ssid, sizeof(ap_cfg.ap.ssid), s_ap_ssid);
     ap_cfg.ap.ssid_len = (uint8_t)strnlen(s_ap_ssid, sizeof(ap_cfg.ap.ssid));
+    copy_wifi_field(ap_cfg.ap.password, sizeof(ap_cfg.ap.password), s_ap_pass);
     ap_cfg.ap.channel = 1;
     ap_cfg.ap.max_connection = 4;
-    ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
 
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG, "set APSTA failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg), TAG, "set AP cfg failed");
     s_ap_active = true;
     start_dns_server();
-    ESP_LOGI(TAG, "SoftAP active: SSID=\"%s\" (http://192.168.4.1/)", s_ap_ssid);
+    ESP_LOGI(TAG, "SoftAP active: SSID=\"%s\" WPA2 PW=\"%s\" (http://192.168.4.1/)",
+             s_ap_ssid, s_ap_pass);
     return ESP_OK;
 }
 
@@ -283,6 +286,7 @@ esp_err_t wifi_manager_init(void)
                  mac[3], mac[4], mac[5]);
     }
     snprintf(s_ap_ssid, sizeof(s_ap_ssid), "CleanSlate-%02X%02X", mac[4], mac[5]);
+    snprintf(s_ap_pass, sizeof(s_ap_pass), "CS-%02X%02X%02X", mac[3], mac[4], mac[5]);
 
     if (s_sta_netif) {
         esp_netif_set_hostname(s_sta_netif, s_device_id);
@@ -309,6 +313,10 @@ esp_err_t wifi_manager_init(void)
     sta_cfg.sta.threshold.authmode = (local.wifi_pass[0] == '\0')
         ? WIFI_AUTH_OPEN
         : WIFI_AUTH_WPA_PSK;
+    sta_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    sta_cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    sta_cfg.sta.pmf_cfg.capable = true;
+    sta_cfg.sta.pmf_cfg.required = false;
 
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(s_sta_has_creds ? WIFI_MODE_STA : WIFI_MODE_APSTA),
                         TAG, "set_mode failed");
@@ -318,14 +326,19 @@ esp_err_t wifi_manager_init(void)
         wifi_config_t ap_cfg = {0};
         copy_wifi_field(ap_cfg.ap.ssid, sizeof(ap_cfg.ap.ssid), s_ap_ssid);
         ap_cfg.ap.ssid_len = (uint8_t)strnlen(s_ap_ssid, sizeof(ap_cfg.ap.ssid));
+        copy_wifi_field(ap_cfg.ap.password, sizeof(ap_cfg.ap.password), s_ap_pass);
         ap_cfg.ap.channel = 1;
         ap_cfg.ap.max_connection = 4;
-        ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+        ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
         ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg), TAG, "set AP config failed");
     }
 
     ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "set_ps failed");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "esp_wifi_start failed");
+    esp_err_t bw_err = esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
+    if (bw_err != ESP_OK) {
+        ESP_LOGW(TAG, "set_bandwidth(BW20) returned %s", esp_err_to_name(bw_err));
+    }
 
     if (mdns_init() == ESP_OK) {
         mdns_hostname_set(s_device_id);
@@ -377,6 +390,10 @@ esp_err_t wifi_manager_apply_sta_credentials(const char *ssid, const char *passw
     sta_cfg.sta.threshold.authmode = (!password || password[0] == '\0')
         ? WIFI_AUTH_OPEN
         : WIFI_AUTH_WPA_PSK;
+    sta_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    sta_cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    sta_cfg.sta.pmf_cfg.capable = true;
+    sta_cfg.sta.pmf_cfg.required = false;
 
     esp_wifi_disconnect();
     if (exit_ap) {
@@ -388,6 +405,7 @@ esp_err_t wifi_manager_apply_sta_credentials(const char *ssid, const char *passw
         s_ap_pinned = false;
     }
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg), TAG, "set STA cfg failed");
+    (void)esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
     return esp_wifi_connect();
 }
 
@@ -525,6 +543,11 @@ const char *wifi_manager_get_device_id(void)
 const char *wifi_manager_get_ap_ssid(void)
 {
     return s_ap_ssid;
+}
+
+const char *wifi_manager_get_ap_password(void)
+{
+    return s_ap_pass;
 }
 
 void wifi_manager_get_sta_ssid(char *buf, size_t buf_len)

@@ -62,6 +62,11 @@ static const glyph_3x5_t s_font_3x5[] = {
     {'.', {0b000, 0b000, 0b000, 0b000, 0b010}},
     {',', {0b000, 0b000, 0b000, 0b010, 0b100}},
     {'!', {0b010, 0b010, 0b010, 0b000, 0b010}},
+    {'?', {0b110, 0b001, 0b010, 0b000, 0b010}},
+    {';', {0b000, 0b010, 0b000, 0b010, 0b100}},
+    {'"', {0b101, 0b101, 0b000, 0b000, 0b000}},
+    {'(', {0b010, 0b100, 0b100, 0b100, 0b010}},
+    {')', {0b010, 0b001, 0b001, 0b001, 0b010}},
     {'/', {0b001, 0b001, 0b010, 0b100, 0b100}},
     {'&', {0b010, 0b101, 0b010, 0b101, 0b011}},
     {'@', {0b111, 0b101, 0b111, 0b100, 0b011}},
@@ -112,7 +117,16 @@ static const glyph_4x6_t s_font_4x6[] = {
     {':', {0b0000, 0b0100, 0b0000, 0b0000, 0b0100, 0b0000}},
     {'-', {0b0000, 0b0000, 0b1111, 0b0000, 0b0000, 0b0000}},
     {'+', {0b0000, 0b0100, 0b1110, 0b0100, 0b0000, 0b0000}},
+    {'.', {0b0000, 0b0000, 0b0000, 0b0000, 0b0100, 0b0100}},
+    {',', {0b0000, 0b0000, 0b0000, 0b0000, 0b0100, 0b1000}},
     {'!', {0b0100, 0b0100, 0b0100, 0b0100, 0b0000, 0b0100}},
+    {'?', {0b0110, 0b1001, 0b0010, 0b0100, 0b0000, 0b0100}},
+    {';', {0b0000, 0b0100, 0b0000, 0b0000, 0b0100, 0b1000}},
+    {'\'', {0b0100, 0b0100, 0b0000, 0b0000, 0b0000, 0b0000}},
+    {'"', {0b1010, 0b1010, 0b0000, 0b0000, 0b0000, 0b0000}},
+    {'(', {0b0010, 0b0100, 0b0100, 0b0100, 0b0100, 0b0010}},
+    {')', {0b0100, 0b0010, 0b0010, 0b0010, 0b0010, 0b0100}},
+    {'/', {0b0001, 0b0010, 0b0010, 0b0100, 0b0100, 0b1000}},
     {' ', {0b0000, 0b0000, 0b0000, 0b0000, 0b0000, 0b0000}},
 };
 
@@ -158,7 +172,13 @@ static const glyph_5x7_t s_font_5x7[] = {
     {'-', {0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000}},
     {'+', {0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000}},
     {'.', {0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100}},
+    {',', {0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100, 0b01000}},
     {'!', {0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100}},
+    {'?', {0b01110, 0b10001, 0b00010, 0b00100, 0b00100, 0b00000, 0b00100}},
+    {';', {0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b01000}},
+    {'"', {0b01010, 0b01010, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000}},
+    {'(', {0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010}},
+    {')', {0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000}},
     {'/', {0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000}},
     {'&', {0b01100, 0b10010, 0b10100, 0b01000, 0b10101, 0b10010, 0b01101}},
     {'\'', {0b00100, 0b00100, 0b01000, 0b00000, 0b00000, 0b00000, 0b00000}},
@@ -214,12 +234,22 @@ int gfx_measure_text(const char *text, gfx_font_id_t font)
     return len * char_w + (len - 1);
 }
 
-void gfx_draw_text_aligned(uint8_t *fb_rgb888, int width, int height,
-                           int x, int y, const char *text,
-                           gfx_font_id_t font, gfx_align_t align,
-                           uint8_t r, uint8_t g, uint8_t b)
+void gfx_draw_text_clipped_y(uint8_t *fb_rgb888, int width, int height,
+                             int x, int y, const char *text,
+                             gfx_font_id_t font, gfx_align_t align,
+                             uint8_t r, uint8_t g, uint8_t b,
+                             int clip_y0, int clip_y1)
 {
     if (!fb_rgb888 || !text || !*text) {
+        return;
+    }
+    if (clip_y0 < 0) {
+        clip_y0 = 0;
+    }
+    if (clip_y1 >= height) {
+        clip_y1 = height - 1;
+    }
+    if (clip_y0 > clip_y1) {
         return;
     }
     int total_w = gfx_measure_text(text, font);
@@ -233,16 +263,115 @@ void gfx_draw_text_aligned(uint8_t *fb_rgb888, int width, int height,
     for (const char *p = text; *p; p++) {
         int cw = 0, ch = 0;
         const uint8_t *rows = find_glyph_rows(*p, font, &cw, &ch);
-        for (int row = 0; row < ch; row++) {
-            uint8_t bits = rows[row];
-            for (int col = 0; col < cw; col++) {
-                if (bits & (1U << (cw - 1 - col))) {
-                    set_pixel(fb_rgb888, width, height, cursor_x + col, y + row, r, g, b);
+        if (cursor_x >= width) {
+            break;
+        }
+        if (cursor_x + cw > 0) {
+            for (int row = 0; row < ch; row++) {
+                int py = y + row;
+                if (py < clip_y0 || py > clip_y1) {
+                    continue;
+                }
+                uint8_t bits = rows[row];
+                for (int col = 0; col < cw; col++) {
+                    if (bits & (1U << (cw - 1 - col))) {
+                        set_pixel(fb_rgb888, width, height, cursor_x + col, py, r, g, b);
+                    }
                 }
             }
         }
         cursor_x += cw + 1;
     }
+}
+
+void gfx_draw_text_subpixel_y(uint8_t *fb_rgb888, int width, int height,
+                              int x, int y_subpx, const char *text,
+                              gfx_font_id_t font, gfx_align_t align,
+                              uint8_t r, uint8_t g, uint8_t b,
+                              int clip_y0, int clip_y1)
+{
+    if (!fb_rgb888 || !text || !*text) {
+        return;
+    }
+    if (clip_y0 < 0) {
+        clip_y0 = 0;
+    }
+    if (clip_y1 >= height) {
+        clip_y1 = height - 1;
+    }
+    if (clip_y0 > clip_y1) {
+        return;
+    }
+    int whole_y = (y_subpx >= 0) ? (y_subpx / 4) : -(((-y_subpx) + 3) / 4);
+    int frac = y_subpx - whole_y * 4; /* 0..3 */
+    if (frac == 0) {
+        gfx_draw_text_clipped_y(fb_rgb888, width, height, x, whole_y, text,
+                                font, align, r, g, b, clip_y0, clip_y1);
+        return;
+    }
+
+    /* Gamma-1.5-compensated blend weights for 0/4, 1/4, 2/4, 3/4, 4/4 coverage
+     * so total emitted LED brightness stays constant as strokes glide across rows. */
+    static const uint8_t k_alpha[5] = { 0, 101, 161, 211, 255 };
+
+    int total_w = gfx_measure_text(text, font);
+    int cursor_x = x;
+    if (align == GFX_ALIGN_CENTER) {
+        cursor_x = x - (total_w / 2);
+    } else if (align == GFX_ALIGN_RIGHT) {
+        cursor_x = x - total_w;
+    }
+
+    for (const char *p = text; *p; p++) {
+        int cw = 0, ch = 0;
+        const uint8_t *rows = find_glyph_rows(*p, font, &cw, &ch);
+        if (cursor_x >= width) {
+            break;
+        }
+        if (cursor_x + cw > 0) {
+            for (int row = 0; row <= ch; row++) {
+                int py = whole_y + row;
+                if (py < clip_y0 || py > clip_y1) {
+                    continue;
+                }
+                uint8_t cur_bits = (row < ch) ? rows[row] : 0U;
+                uint8_t prev_bits = (row > 0) ? rows[row - 1] : 0U;
+                for (int col = 0; col < cw; col++) {
+                    int px = cursor_x + col;
+                    if (px < 0 || px >= width) {
+                        continue;
+                    }
+                    uint8_t mask = (uint8_t)(1U << (cw - 1 - col));
+                    uint8_t cur_on = (cur_bits & mask) ? 1U : 0U;
+                    uint8_t prev_on = (prev_bits & mask) ? 1U : 0U;
+                    uint8_t cov = (uint8_t)(cur_on * (4 - frac) + prev_on * frac);
+                    if (cov == 0U) {
+                        continue;
+                    }
+                    if (cov >= 4U) {
+                        set_pixel(fb_rgb888, width, height, px, py, r, g, b);
+                    } else {
+                        uint8_t a = k_alpha[cov];
+                        uint8_t inv = (uint8_t)(255U - a);
+                        size_t idx = ((size_t)py * (size_t)width + (size_t)px) * 3U;
+                        fb_rgb888[idx + 0] = (uint8_t)(((uint32_t)fb_rgb888[idx + 0] * inv + (uint32_t)r * a + 127U) / 255U);
+                        fb_rgb888[idx + 1] = (uint8_t)(((uint32_t)fb_rgb888[idx + 1] * inv + (uint32_t)g * a + 127U) / 255U);
+                        fb_rgb888[idx + 2] = (uint8_t)(((uint32_t)fb_rgb888[idx + 2] * inv + (uint32_t)b * a + 127U) / 255U);
+                    }
+                }
+            }
+        }
+        cursor_x += cw + 1;
+    }
+}
+
+void gfx_draw_text_aligned(uint8_t *fb_rgb888, int width, int height,
+                           int x, int y, const char *text,
+                           gfx_font_id_t font, gfx_align_t align,
+                           uint8_t r, uint8_t g, uint8_t b)
+{
+    gfx_draw_text_clipped_y(fb_rgb888, width, height, x, y, text, font, align,
+                            r, g, b, 0, height - 1);
 }
 
 void gfx_draw_text(uint8_t *fb_rgb888, int width, int height,
