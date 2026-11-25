@@ -1413,6 +1413,13 @@ static void cache_apps_screens_from_json(const char *json, size_t len)
             continue;
         }
 
+        if (json_obj_get(app_obj, "click_cycles_screens", &v)) {
+            bool click_cyc = false;
+            if (json_as_bool(v, &click_cyc)) {
+                parsed[cnt].click_cycles_screens = click_cyc;
+            }
+        }
+
         json_span_t screens_arr;
         if (json_obj_get(app_obj, "screens", &screens_arr) && !json_is_null(screens_arr)) {
             size_t scur = 0;
@@ -1585,7 +1592,7 @@ size_t api_client_expand_rotary_slots(const cs_device_config_t *cfg,
             }
         }
 
-        if (desc && desc->screen_count > 0) {
+        if (desc && desc->screen_count > 0 && !desc->click_cycles_screens) {
             for (size_t s = 0; s < desc->screen_count && out_cnt < max_slots; s++) {
                 cs_rotary_slot_t *sl = &out_slots[out_cnt++];
                 memset(sl, 0, sizeof(*sl));
@@ -1605,6 +1612,32 @@ size_t api_client_expand_rotary_slots(const cs_device_config_t *cfg,
 
     free(meta);
     return out_cnt;
+}
+
+bool api_client_get_click_screens(const char *app_id, cs_app_screens_t *out)
+{
+    if (!app_id || !app_id[0]) {
+        return false;
+    }
+    bool found = false;
+    portENTER_CRITICAL(&s_apps_mux);
+    size_t cnt = s_app_screens_count;
+    if (cnt > CS_MAX_APPS) {
+        cnt = CS_MAX_APPS;
+    }
+    for (size_t i = 0; i < cnt; i++) {
+        if (strcmp(s_app_screens[i].app_id, app_id) == 0) {
+            if (s_app_screens[i].click_cycles_screens && s_app_screens[i].screen_count > 1U) {
+                found = true;
+                if (out) {
+                    *out = s_app_screens[i];
+                }
+            }
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&s_apps_mux);
+    return found;
 }
 
 esp_err_t api_client_fetch_device_config_json(char **out_json, size_t *out_len)

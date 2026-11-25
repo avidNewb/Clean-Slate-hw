@@ -24,7 +24,7 @@ extern "C" {
 #define CS_MAX_OVERLAYS         8
 #define CS_MAX_ALERT_FRAMES     32
 
-#define CS_OVERLAY_TEXT_CAP     640
+#define CS_OVERLAY_TEXT_CAP     960
 
 typedef enum {
     CS_OVERLAY_NONE = 0,
@@ -76,6 +76,7 @@ typedef struct {
 
 typedef struct {
     char app_id[32];
+    bool click_cycles_screens;
     cs_screen_desc_t screens[CS_MAX_SCREENS_PER_APP];
     size_t screen_count;
 } cs_app_screens_t;
@@ -233,6 +234,12 @@ esp_err_t api_client_fetch_active_events(bool *birthdays_active, bool *holidays_
 size_t api_client_expand_rotary_slots(const cs_device_config_t *cfg,
                                       cs_rotary_slot_t *out_slots,
                                       size_t max_slots);
+
+/**
+ * Check whether app_id supports click-to-cycle multiple screens (click_cycles_screens
+ * with screen_count > 1). If out is non-NULL, copies the descriptor into *out.
+ */
+bool api_client_get_click_screens(const char *app_id, cs_app_screens_t *out);
 
 /**
  * Fetch /api/v1/device/{device_id}/frame[?app_id=...&screen=...&teams=...&consume_alerts=0&compress=1]

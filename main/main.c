@@ -88,6 +88,8 @@ typedef struct {
     uint16_t rotary_idle_sec;
     char active_app_id[64];
     char auto_app_id[32];
+    char click_screen_app[32];
+    char click_screen_id[24];
     char ota_status[24];
     char ota_detail[64];
     uint32_t api_fail_count;
@@ -215,6 +217,18 @@ static void format_app_short_label(const char *app_id, char *out, size_t cap)
                 src = (strcmp(app_part, "cbb_scoreboard") == 0) ? "TIPOFF" : "COUNTDOWN";
             } else if (strcmp(scr_part, "tv_info") == 0) {
                 src = (strcmp(app_part, "cbb_scoreboard") == 0) ? "TV & MATCHUP" : "TV & WEATHER";
+            } else if (strcmp(scr_part, "top25") == 0) {
+                src = "TOP 25";
+            } else if (strcmp(scr_part, "ap_top25") == 0) {
+                src = "AP TOP 25";
+            } else if (strcmp(scr_part, "cfp_top25") == 0) {
+                src = "CFP TOP 25";
+            } else if (strcmp(scr_part, "rankings") == 0) {
+                src = (strcmp(app_part, "cbb_scoreboard") == 0) ? "AP TOP 25" : "AP/CFP 25";
+            } else if (strcmp(scr_part, "forecast") == 0) {
+                src = "WEATHER";
+            } else if (strcmp(scr_part, "sun_moon") == 0) {
+                src = "SUN & MOON";
             } else {
                 src = scr_part;
             }
@@ -437,12 +451,118 @@ static int s_last_auto_b = -1;
 
 #define MENU_IDLE_TIMEOUT_SEC (20U)
 
+static const char *current_effective_slot_locked(void);
+
+static void active_base_app_locked(char *out, size_t cap)
+{
+    if (!out || cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    const char *eff = current_effective_slot_locked();
+    const char *src = (eff && eff[0])
+                          ? eff
+                          : (s_shared.active_app_id[0] ? s_shared.active_app_id : s_shared.auto_app_id);
+    if (src && src[0]) {
+        split_slot_key(src, out, cap, NULL, 0);
+    }
+}
+
+static void clear_click_screen_locked(void)
+{
+    s_shared.click_screen_app[0] = '\0';
+    s_shared.click_screen_id[0] = '\0';
+}
+
+static void build_effective_request_key_locked(char *out, size_t cap)
+{
+    if (!out || cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    const char *eff = current_effective_slot_locked();
+    if (eff && eff[0]) {
+        char base[32] = {0};
+        char scr[24] = {0};
+        split_slot_key(eff, base, sizeof(base), scr, sizeof(scr));
+        if (!scr[0] &&
+            s_shared.click_screen_app[0] && s_shared.click_screen_id[0] &&
+            strcmp(base, s_shared.click_screen_app) == 0) {
+            snprintf(out, cap, "%s:%s", base, s_shared.click_screen_id);
+        } else {
+            snprintf(out, cap, "%s", eff);
+        }
+        return;
+    }
+    if (s_shared.click_screen_app[0] && s_shared.click_screen_id[0]) {
+        char auto_base[32] = {0};
+        const char *auto_src = s_shared.auto_app_id[0]
+                                   ? s_shared.auto_app_id
+                                   : s_shared.active_app_id;
+        split_slot_key(auto_src, auto_base, sizeof(auto_base), NULL, 0);
+        if (auto_base[0] && strcmp(auto_base, s_shared.click_screen_app) == 0) {
+            snprintf(out, cap, "%s:%s", auto_base, s_shared.click_screen_id);
+            return;
+        }
+    }
+}
+
+static bool cycle_click_screen_locked(void)
+{
+    char base_app[32] = {0};
+    active_base_app_locked(base_app, sizeof(base_app));
+    cs_app_screens_t cs = {0};
+    if (!api_client_get_click_screens(base_app, &cs) || cs.screen_count < 2U) {
+        return false;
+    }
+
+    size_t cur_idx = 0;
+    if (s_shared.click_screen_app[0] &&
+        strcmp(s_shared.click_screen_app, base_app) == 0 &&
+        s_shared.click_screen_id[0]) {
+        for (size_t i = 0; i < cs.screen_count; i++) {
+            if (strcmp(cs.screens[i].screen_id, s_shared.click_screen_id) == 0) {
+                cur_idx = i;
+                break;
+            }
+        }
+    }
+
+    size_t next_idx = (cur_idx + 1U) % cs.screen_count;
+    char target_key[64] = {0};
+    if (next_idx == 0U) {
+        clear_click_screen_locked();
+        snprintf(target_key, sizeof(target_key), "%s", base_app);
+    } else {
+        snprintf(s_shared.click_screen_app, sizeof(s_shared.click_screen_app), "%s", base_app);
+        snprintf(s_shared.click_screen_id, sizeof(s_shared.click_screen_id),
+                 "%s", cs.screens[next_idx].screen_id);
+        snprintf(target_key, sizeof(target_key), "%s:%s",
+                 base_app, cs.screens[next_idx].screen_id);
+    }
+
+    if (s_shared.rotary_override_active) {
+        s_shared.last_rotary_us = esp_timer_get_time();
+    }
+    bool hit = cache_apply_app_locked(target_key);
+    ESP_LOGI(TAG, "Click screen cycle -> %s (idx=%u/%u, cached=%s)",
+             target_key, (unsigned)next_idx, (unsigned)cs.screen_count,
+             hit ? "yes" : "no");
+    return true;
+}
+
 static void update_fast_click_locked(void)
 {
     bool in_dbl_edit = (s_shared.menu_edit &&
                         (s_shared.menu_page == MENU_VOLUME ||
                          s_shared.menu_page == MENU_BRIGHTNESS));
-    bool fast = s_alert_playing || (s_shared.menu_page != MENU_NONE && !in_dbl_edit);
+    char base_app[32] = {0};
+    active_base_app_locked(base_app, sizeof(base_app));
+    bool app_click_cycles = (s_shared.menu_page == MENU_NONE &&
+                             api_client_get_click_screens(base_app, NULL));
+    bool fast = s_alert_playing ||
+                (s_shared.menu_page != MENU_NONE && !in_dbl_edit) ||
+                app_click_cycles;
     peripherals_set_fast_click(fast);
     peripherals_set_max_clicks(in_dbl_edit ? 2 : 3);
 }
@@ -707,6 +827,7 @@ static bool step_rotary_app_locked(int step)
     s_shared.manual_pinned_slot[0] = '\0';
     s_shared.temp_override_slot[0] = '\0';
     s_shared.temp_override_until_us = 0;
+    clear_click_screen_locked();
     if (n <= 0 || step == 0) {
         return false;
     }
@@ -771,6 +892,7 @@ static void activate_temp_override(const char *slot_key, uint32_t duration_sec)
         s_shared.temp_override_until_us =
             esp_timer_get_time() + (int64_t)duration_sec * 1000000LL;
         s_shared.rotary_override_active = false;
+        clear_click_screen_locked();
         cache_apply_app_locked(s_shared.temp_override_slot);
         xSemaphoreGive(s_state_mutex);
     }
@@ -797,6 +919,7 @@ static void portal_on_set_pinned_app(const char *app_id)
         s_shared.temp_override_slot[0] = '\0';
         s_shared.temp_override_until_us = 0;
         s_shared.rotary_override_active = false;
+        clear_click_screen_locked();
         const char *target = NULL;
         if (app_id && app_id[0] != '\0') {
             int idx = find_rotary_slot_idx_locked(app_id);
@@ -976,6 +1099,11 @@ static void portal_on_audio_action(const char *action)
 
 static void portal_on_request_ota(void)
 {
+    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        snprintf(s_shared.ota_status, sizeof(s_shared.ota_status), "checking");
+        s_shared.ota_detail[0] = '\0';
+        xSemaphoreGive(s_state_mutex);
+    }
     s_force_ota_check = true;
     if (s_api_task) {
         xTaskNotifyGive(s_api_task);
@@ -1196,6 +1324,11 @@ static void wrap_paged_lines_cached(const cs_overlay_t *ov)
     const char *p = ov->text;
     while (*p && s_paged_line_count < PAGED_TEXT_MAX_LINES) {
         while (*p && isspace((unsigned char)*p)) {
+            if (*p == '\n' && cur_len > 0U && s_paged_line_count < PAGED_TEXT_MAX_LINES) {
+                memcpy(s_paged_lines[s_paged_line_count++], cur, cur_len + 1U);
+                cur[0] = '\0';
+                cur_len = 0;
+            }
             p++;
         }
         if (!*p) {
@@ -2219,6 +2352,7 @@ static void render_task(void *arg)
         char toast[24] = "";
         int64_t toast_until = 0;
         char admin_pin_copy[8] = {0};
+        bool click_screens_avail = false;
 
         if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             if (s_shared.pending_alert.valid) {
@@ -2258,6 +2392,9 @@ static void render_task(void *arg)
                     memcpy(overlays_copy, s_shared.overlays,
                            overlay_count * sizeof(cs_overlay_t));
                 }
+                char base_app[32] = {0};
+                active_base_app_locked(base_app, sizeof(base_app));
+                click_screens_avail = api_client_get_click_screens(base_app, NULL);
             }
             xSemaphoreGive(s_state_mutex);
         }
@@ -2346,6 +2483,12 @@ static void render_task(void *arg)
                 anim_elapsed_ms = 0;
             }
             composite_overlays(work_fb, overlays_copy, overlay_count, anim_elapsed_ms, anim_scroll_px);
+            if (click_screens_avail) {
+                /* Subtle 2x2 top-right indicator (like the bottom-right connection dot)
+                 * showing that clicking the knob cycles additional screens in this app. */
+                gfx_fill_rect(work_fb, CS_FRAME_WIDTH, CS_FRAME_HEIGHT,
+                              CS_FRAME_WIDTH - 2, 0, 2, 2, 70, 200, 235);
+            }
         }
 
         if (toast[0] && toast_until > esp_timer_get_time()) {
@@ -2641,7 +2784,20 @@ static void input_task(void *arg)
 #endif
                     ESP_LOGI(TAG, "Alert dismissed via button press");
                 } else if (ev.type == CS_INPUT_BTN_SHORT) {
-                    play_manual_song(0);
+                    bool cycled_screen = false;
+                    if (xSemaphoreTake(s_state_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        cycled_screen = cycle_click_screen_locked();
+                        if (cycled_screen) {
+                            update_fast_click_locked();
+                        }
+                        xSemaphoreGive(s_state_mutex);
+                    }
+                    if (cycled_screen) {
+                        wake_render = true;
+                        wake_api = true;
+                    } else {
+                        play_manual_song(0);
+                    }
                 } else if (ev.type == CS_INPUT_BTN_DOUBLE) {
                     play_manual_song(1);
                 } else if (ev.type == CS_INPUT_BTN_TRIPLE) {
@@ -2734,7 +2890,9 @@ static void input_task(void *arg)
                 s_shared.selected_app_idx = -1;
                 s_shared.manual_pinned_slot[0] = '\0';
                 s_shared.rotary_override_active = false;
+                clear_click_screen_locked();
                 cache_apply_app_locked(NULL);
+                update_fast_click_locked();
                 return_auto = true;
             }
             xSemaphoreGive(s_state_mutex);
@@ -3087,10 +3245,7 @@ static void api_task(void *arg)
                     xTaskNotifyGive(s_render_task);
                 }
             }
-            const char *eff = current_effective_slot_locked();
-            if (eff[0] != '\0') {
-                snprintf(req_slot_key, sizeof(req_slot_key), "%s", eff);
-            }
+            build_effective_request_key_locked(req_slot_key, sizeof(req_slot_key));
             split_slot_key(req_slot_key, app_override, sizeof(app_override),
                            screen_override, sizeof(screen_override));
             if (s_shared.has_frame) {
@@ -3151,12 +3306,14 @@ static void api_task(void *arg)
                     if (store_key[0]) {
                         cache_touch_slot_locked(store_key, resp->refresh_seconds);
                     }
-                    const char *cur_slot_key = current_effective_slot_locked();
+                    char cur_slot_key[64] = {0};
+                    build_effective_request_key_locked(cur_slot_key, sizeof(cur_slot_key));
                     if (strcmp(cur_slot_key, req_slot_key) != 0) {
                         stale_selection = true;
                     } else if (s_shared.switching_pending ||
                                (store_key[0] && strcmp(s_shared.active_app_id, store_key) != 0)) {
                         cache_apply_app_locked(store_key[0] ? store_key : NULL);
+                        update_fast_click_locked();
                         need_render_wake = true;
                     }
                 } else {
@@ -3172,7 +3329,8 @@ static void api_task(void *arg)
                                  "%s", resp->app_id);
                     }
 
-                    const char *cur_slot_key = current_effective_slot_locked();
+                    char cur_slot_key[64] = {0};
+                    build_effective_request_key_locked(cur_slot_key, sizeof(cur_slot_key));
                     if (strcmp(cur_slot_key, req_slot_key) != 0) {
                         stale_selection = true;
                         api_client_free_alert(&resp->alert);
@@ -3192,6 +3350,7 @@ static void api_task(void *arg)
                         s_shared.has_frame = true;
                         s_shared.switching_pending = false;
                         s_shared.switching_label[0] = '\0';
+                        update_fast_click_locked();
                         need_render_wake = true;
 
                         if (resp->alert.valid) {
